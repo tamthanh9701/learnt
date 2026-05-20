@@ -233,7 +233,7 @@ export const ConversationPage: React.FC = () => {
       {/* Navbar header */}
       <div className="flex justify-between align-center" style={{ marginBottom: 'var(--spacing-md)' }}>
         <button 
-          className="back-btn flex align-center gap-xs body-sm"
+          className="btn btn-outline btn-sm flex align-center gap-xs"
           onClick={() => navigate('/speaking')}
         >
           <ChevronLeft size={16} />
@@ -258,7 +258,7 @@ export const ConversationPage: React.FC = () => {
           <div className="input-group" style={{ width: '100%', maxWidth: '400px', marginBottom: 'var(--spacing-lg)' }}>
             <input
               type="text"
-              className="text-input text-center"
+              className="input text-center"
               value={topic}
               onChange={(e) => setTopic(e.target.value)}
               placeholder="e.g. Job Interview Preparation"
@@ -351,7 +351,7 @@ export const ConversationPage: React.FC = () => {
                 <button
                   type="button"
                   onClick={toggleListening}
-                  className={`mic-toggle-btn flex align-center justify-center ${isListening ? 'listening' : ''}`}
+                  className={`btn btn-outline flex align-center justify-center ${isListening ? 'listening' : ''}`}
                   title={isListening ? 'Stop listening' : 'Start speaking input'}
                 >
                   {isListening ? <MicOff size={18} /> : <Mic size={18} />}
@@ -359,7 +359,7 @@ export const ConversationPage: React.FC = () => {
               ) : (
                 <button
                   type="button"
-                  className="mic-toggle-btn flex align-center justify-center disabled"
+                  className="btn btn-outline flex align-center justify-center disabled"
                   title="Voice input not supported by browser"
                   disabled
                 >
@@ -369,7 +369,7 @@ export const ConversationPage: React.FC = () => {
 
               <input
                 type="text"
-                className="text-input flex-1"
+                className="input flex-1"
                 placeholder={isListening 
                   ? (isEn ? 'Listening... Speak now' : 'Đang lắng nghe... Hãy nói ngay') 
                   : (isEn ? 'Type your response here...' : 'Nhập câu trả lời của bạn...')

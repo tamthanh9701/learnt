@@ -1,0 +1,706 @@
+
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ElevenLabs Studio — Android 17 Glass</title>
+<style>
+/* ========== TOKENS: Android 17 Soft Glass ========== */
+:root{
+  --font-display: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-body:  "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  --font-mono:  "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Monaco, monospace;
+
+  /* Surface tonal stack — light */
+  --bg:         #f6f7f9;
+  --tonal-1:    rgba(255,255,255,0.55);
+  --tonal-2:    rgba(255,255,255,0.38);
+  --tonal-3:    rgba(255,255,255,0.22);
+  --fg:         #1f1f23;
+  --fg-2:       #4a4a52;
+  --fg-3:       #8e8e98;
+  --border:     rgba(18,18,22,0.06);
+  --border-light: rgba(255,255,255,0.85);
+  --accent:     #006d5f;
+  --accent-2:   #00564a;
+  --accent-text:#fff;
+  --danger:#dc2626; --warn:#c28a00; --success:#007c3f;
+
+  /* Glass */
+  --glass:           rgba(255,255,255,0.32);
+  --glass-strong:    rgba(255,255,255,0.52);
+  --glass-border:    rgba(255,255,255,0.55);
+  --glass-highlight: rgba(255,255,255,0.95);
+  --glass-shadow:    0 8px 32px rgba(18,18,30,0.06), 0 2px 8px rgba(18,18,30,0.04);
+  --glass-inset:     inset 0 1px 1px rgba(255,255,255,0.9);
+
+  /* Depth */
+  --blur-soft:  blur(18px) saturate(160%);
+  --blur-deep:  blur(28px) saturate(190%);
+}
+
+[data-theme="dark"]{
+  --bg:         #0b0b0e;
+  --tonal-1:    rgba(255,255,255,0.09);
+  --tonal-2:    rgba(255,255,255,0.05);
+  --tonal-3:    rgba(255,255,255,0.03);
+  --fg:         #f2f2f5;
+  --fg-2:       #b0b0b8;
+  --fg-3:       #6e6e78;
+  --border:     rgba(255,255,255,0.07);
+  --border-light:rgba(255,255,255,0.04);
+  --accent:     #2dd4bf;
+  --accent-2:   #5eead4;
+  --accent-text:#081c1a;
+  --danger:#ff6b6b; --warn:#ffd166; --success:#52b788;
+
+  --glass:           rgba(255,255,255,0.055);
+  --glass-strong:    rgba(255,255,255,0.10);
+  --glass-border:    rgba(255,255,255,0.10);
+  --glass-highlight: rgba(255,255,255,0.18);
+  --glass-shadow:    0 12px 40px rgba(0,0,0,0.35), 0 4px 12px rgba(0,0,0,0.25);
+  --glass-inset:     inset 0 1px 0 rgba(255,255,255,0.08);
+}
+
+/* ========== RESET ========== */
+*,*::before,*::after{box-sizing:border-box;margin:0}
+html{-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
+body{
+  font-family:var(--font-body);background:var(--bg);color:var(--fg);line-height:1.5;min-height:100vh;
+  background-image:
+    radial-gradient(900px 700px at -5% -10%, color-mix(in oklab, var(--accent) 14%, transparent) 0%, transparent 55%),
+    radial-gradient(800px 600px at 105% 10%,  color-mix(in oklab, var(--accent) 10%, transparent) 0%, transparent 50%),
+    radial-gradient(1100px 800px at 50% 105%, color-mix(in oklab, var(--accent) 7%, transparent) 0%, transparent 45%);
+  background-attachment:fixed;
+}
+
+/* ========== UTILITIES ========== */
+.row{display:flex;align-items:center;gap:var(--gap,12px)}
+.row-between{display:flex;align-items:center;justify-content:space-between;gap:var(--gap,12px)}
+.grid{display:grid;gap:var(--gap,16px)}
+.stack>*+*{margin-top:var(--gap,16px)}
+.caption{font-size:11px;color:var(--fg-3);text-transform:uppercase;letter-spacing:0.1em}
+
+/* ========== TYPOGRAPHY ========== */
+.t-display{font-family:var(--font-display);font-weight:600;letter-spacing:-0.03em;line-height:1.1;font-size:clamp(34px,3.6vw,60px)}
+.t-heading{font-family:var(--font-display);font-weight:600;letter-spacing:-0.02em;line-height:1.18;font-size:clamp(24px,2.2vw,38px)}
+.t-subhead{font-family:var(--font-display);font-weight:600;line-height:1.25;font-size:clamp(18px,1.4vw,22px)}
+.t-body{font-size:14px;line-height:1.6;color:var(--fg-2)}
+.t-mono{font-family:var(--font-mono);font-size:12px;letter-spacing:0.02em}
+
+/* ========== GLASS COMPONENTS ========== */
+.glass{
+  background:var(--glass);
+  backdrop-filter:var(--blur-soft);
+  -webkit-backdrop-filter:var(--blur-soft);
+  border:1px solid var(--glass-border);
+  border-radius:24px;
+  box-shadow:var(--glass-shadow), var(--glass-inset);
+}
+.glass-strong{
+  background:var(--glass-strong);
+  backdrop-filter:var(--blur-deep);
+  -webkit-backdrop-filter:var(--blur-deep);
+  border:1px solid var(--glass-border);
+  border-radius:28px;
+  box-shadow:var(--glass-shadow), var(--glass-inset);
+}
+.glass-thin{
+  background:var(--tonal-1);
+  backdrop-filter:blur(12px) saturate(140%);
+  -webkit-backdrop-filter:blur(12px) saturate(140%);
+  border:1px solid var(--border);
+  border-radius:20px;
+}
+
+/* ========== BUTTONS ========== */
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  border:1px solid transparent;border-radius:14px;padding:10px 18px;
+  font-family:inherit;font-weight:500;font-size:13.5px;line-height:1;
+  cursor:pointer;transition:transform .06s ease,background .2s ease,border-color .2s ease,box-shadow .2s ease;
+}
+.btn:active{transform:scale(0.98)}
+.btn-primary{
+  background:var(--accent);color:var(--accent-text);border-color:transparent;
+  box-shadow:0 4px 14px color-mix(in oklab,var(--accent) 30%,transparent);
+}
+.btn-primary:hover{background:var(--accent-2)}
+.btn-secondary{background:var(--tonal-2);color:var(--fg);border-color:var(--border)}
+.btn-secondary:hover{background:var(--tonal-1);border-color:var(--fg-3)}
+.btn-ghost{background:transparent;color:var(--fg-3);border-color:transparent}
+.btn-ghost:hover{color:var(--fg);background:var(--tonal-2)}
+.btn-sm{padding:8px 14px;font-size:12.5px;border-radius:12px}
+
+/* ========== INPUTS ========== */
+.input{
+  width:100%;appearance:none;background:var(--glass);color:var(--fg);
+  border:1px solid var(--glass-border);border-radius:14px;padding:11px 14px;
+  font-family:inherit;font-size:13.5px;line-height:1.4;outline:none;
+  backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  box-shadow:var(--glass-inset);
+  transition:border-color .2s ease,box-shadow .2s ease,background .2s ease;
+}
+.input::placeholder{color:var(--fg-3)}
+.input:focus{border-color:color-mix(in oklab,var(--accent) 50%,var(--glass-border));box-shadow:0 0 0 3px color-mix(in oklab,var(--accent) 22%,transparent),var(--glass-inset)}
+
+/* ========== CARDS ========== */
+.card{
+  background:var(--tonal-1);border:1px solid var(--border);border-radius:24px;padding:22px;
+  transition:border-color .2s ease,transform .25s cubic-bezier(.4,0,.2,1);
+}
+.card-hover:hover{border-color:var(--fg-3);transform:translateY(-2px)}
+.card-glass{
+  background:var(--glass);
+  backdrop-filter:var(--blur-soft);-webkit-backdrop-filter:var(--blur-soft);
+  border:1px solid var(--glass-border);border-radius:24px;padding:22px;
+  box-shadow:var(--glass-shadow),var(--glass-inset);
+  transition:transform .25s cubic-bezier(.4,0,.2,1);
+}
+.card-glass:hover{transform:translateY(-2px)}
+
+/* ========== BADGES ========== */
+.badge{
+  display:inline-flex;align-items:center;gap:6px;padding:5px 12px;
+  border-radius:999px;font-size:11.5px;font-weight:600;letter-spacing:0.01em;
+  border:1px solid var(--border);background:var(--tonal-2);color:var(--fg-2);
+}
+
+/* ========== TABLES ========== */
+.table-wrap{overflow:auto;border:1px solid var(--border);border-radius:22px}
+table{width:100%;border-collapse:collapse;font-size:13px}
+thead th{
+  text-align:left;padding:13px 18px;font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:0.07em;
+  color:var(--fg-3);border-bottom:1px solid var(--border);background:var(--tonal-2);
+}
+tbody td{padding:15px 18px;border-bottom:1px solid var(--border)}
+tbody tr:last-child td{border-bottom:none}
+tbody tr:hover td{background:var(--tonal-2)}
+
+/* ========== TABS ========== */
+.tabs{display:flex;gap:6px;padding:5px;border-radius:16px;background:var(--tonal-2);border:1px solid var(--border);width:fit-content}
+.tab{
+  padding:9px 16px;font-size:13px;font-weight:500;color:var(--fg-3);
+  background:transparent;border:none;border-radius:12px;cursor:pointer;
+  transition:background .2s ease,color .2s ease;
+}
+.tab[aria-selected="true"]{background:var(--tonal-1);color:var(--fg);box-shadow:0 1px 4px rgba(0,0,0,0.04)}
+.tab:hover{color:var(--fg)}
+
+/* ========== SIDEBAR ========== */
+.sidebar{
+  position:fixed;inset:0 auto 0 0;width:264px;z-index:50;
+  display:flex;flex-direction:column;padding:22px 14px 16px;
+  background:var(--glass-strong);
+  backdrop-filter:var(--blur-deep);-webkit-backdrop-filter:var(--blur-deep);
+  border-right:1px solid var(--glass-border);
+  box-shadow:var(--glass-shadow), inset -1px 0 0 var(--glass-highlight);
+}
+.sidebar-header{padding:0 10px 18px;display:flex;align-items:center;gap:12px}
+.logo-mark{
+  width:32px;height:32px;border-radius:10px;background:var(--accent);color:var(--accent-text);
+  display:grid;place-items:center;font-weight:700;font-size:14px;
+}
+.nav{margin-top:4px;display:flex;flex-direction:column;gap:3px}
+.nav-item{
+  display:flex;align-items:center;gap:12px;padding:10px 12px;border-radius:14px;
+  font-size:13.5px;font-weight:500;color:var(--fg-3);cursor:pointer;border:none;background:none;width:100%;text-align:left;
+  transition:background .18s ease,color .18s ease;
+}
+.nav-item:hover{background:var(--tonal-2);color:var(--fg)}
+.nav-item[aria-current="page"]{background:var(--tonal-1);color:var(--fg)}
+.nav-icon{width:18px;height:18px;opacity:0.7}
+
+/* ========== TOPBAR ========== */
+.topbar{
+  height:68px;padding:0 26px;position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;justify-content:space-between;
+  background:var(--glass-strong);
+  backdrop-filter:var(--blur-deep);-webkit-backdrop-filter:var(--blur-deep);
+  border-bottom:1px solid var(--glass-border);
+  box-shadow:var(--glass-shadow), inset 0 -1px 0 var(--glass-highlight);
+}
+
+/* ========== LAYOUT ========== */
+.main{margin-left:264px;min-height:100vh}
+.content{padding:26px;max-width:1100px}
+.section-title{margin-bottom:6px}
+.section-desc{margin-bottom:24px;max-width:640px}
+
+/* ========== SWATCHES ========== */
+.swatch-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
+.swatch{border:1px solid var(--border);border-radius:22px;overflow:hidden}
+.swatch-color{height:84px}
+.swatch-info{padding:14px 16px}
+.swatch-name{font-weight:600;font-size:13px}
+.swatch-val{font-family:var(--font-mono);font-size:12px;color:var(--fg-3);margin-top:4px}
+
+/* ========== COMPONENTS GALLERY ========== */
+.component-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:24px}
+.component-box{border:1px solid var(--border);border-radius:24px;padding:26px}
+.component-box>.t-subhead{margin-bottom:18px}
+
+/* ========== WAVEFORM ========== */
+.waveform{display:flex;align-items:center;gap:3px;height:44px}
+.bar{width:3px;background:var(--accent);border-radius:3px;opacity:0.85;animation:wave 1.2s ease-in-out infinite}
+@keyframes wave{0%,100%{height:18%}50%{height:100%}}
+
+/* ========== STATS ========== */
+.stats-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px;margin-bottom:26px}
+.stat-card{border:1px solid var(--border);border-radius:24px;padding:22px}
+.stat-value{font-family:var(--font-mono);font-size:30px;font-weight:600;letter-spacing:-0.02em}
+.stat-label{font-size:12px;color:var(--fg-3);margin-top:6px}
+
+/* ========== PLAYER ========== */
+.player{
+  border-radius:24px;padding:20px;
+  background:var(--glass-strong);
+  backdrop-filter:var(--blur-deep);-webkit-backdrop-filter:var(--blur-deep);
+  border:1px solid var(--glass-border);
+  box-shadow:var(--glass-shadow),var(--glass-inset);
+}
+.player-bar{height:5px;background:var(--tonal-2);border-radius:999px;overflow:hidden;margin-top:14px}
+.player-progress{height:100%;width:34%;background:var(--accent);border-radius:999px;transition:width .3s linear}
+
+/* ========== TOGGLE ========== */
+.toggle{
+  appearance:none;width:46px;height:26px;border-radius:999px;background:var(--tonal-3);
+  position:relative;cursor:pointer;outline:none;border:1px solid var(--border);
+  transition:background .2s ease,border-color .2s ease;
+}
+.toggle::after{content:"";position:absolute;top:2.5px;left:2.5px;width:20px;height:20px;border-radius:50%;background:#fff;transition:transform .25s cubic-bezier(.4,0,.2,1);box-shadow:0 2px 6px rgba(0,0,0,0.18)}
+.toggle:checked{background:var(--accent);border-color:transparent}
+.toggle:checked::after{transform:translateX(20px)}
+
+/* ========== RESPONSIVE ========== */
+@media(max-width:1024px){
+  .sidebar{transform:translateX(-110%);transition:transform .3s cubic-bezier(.4,0,.2,1)}
+  .sidebar.open{transform:translateX(0)}
+  .main{margin-left:0}
+  .overlay{position:fixed;inset:0;background:rgba(0,0,0,0.35);z-index:40;display:none}
+  .overlay.show{display:block}
+}
+@media(max-width:640px){
+  .content{padding:16px}
+  .stats-grid{grid-template-columns:1fr 1fr}
+  .component-grid{grid-template-columns:1fr}
+  .swatch-grid{grid-template-columns:1fr 1fr}
+}
+
+/* ========== TRANSITIONS ========== */
+body,.card,.sidebar,.topbar,.input,.btn,table,.nav-item,.card-glass,.player,.glass,.glass-strong,.glass-thin{
+  transition:background-color .3s ease,border-color .25s ease,color .18s ease,backdrop-filter .3s ease;
+}
+</style>
+</head>
+<body>
+
+<div id="overlay" class="overlay" onclick="closeSidebar()"></div>
+
+<!-- Sidebar -->
+<aside id="sidebar" class="sidebar">
+  <div class="sidebar-header">
+    <div class="logo-mark">11</div>
+    <div>
+      <div class="t-subhead" style="font-size:15.5px">ElevenLabs</div>
+      <div class="caption" style="margin-top:3px">Design System</div>
+    </div>
+  </div>
+  <nav class="nav" aria-label="Design system">
+    <button class="nav-item" onclick="goTo('tokens')" aria-current="page" data-target="tokens">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="4"/><path d="M3 9h18"/></svg>
+      Tokens
+    </button>
+    <button class="nav-item" onclick="goTo('components')" data-target="components">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7V4h3M4 17v3h3M20 7V4h-3M20 17v3h-3M9 9h6v6H9z"/></svg>
+      Components
+    </button>
+    <button class="nav-item" onclick="goTo('dashboard')" data-target="dashboard">
+      <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3h7v7H3zM14 3h7v7h-7zM14 14h7v7h-7zM3 14h7v7H3z"/></svg>
+      Studio Preview
+    </button>
+  </nav>
+  <div style="margin-top:auto;padding-top:10px">
+    <div style="height:1px;background:var(--border);margin-bottom:14px"></div>
+    <div class="row-between" style="padding:0 10px">
+      <span class="t-body" style="font-size:12px">Theme</span>
+      <input type="checkbox" class="toggle" id="themeToggle" onchange="toggleTheme()">
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div class="row">
+      <button class="btn btn-ghost btn-sm" style="display:none" id="menuBtn" onclick="openSidebar()">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+      </button>
+      <span class="caption" id="pageLabel">Tokens</span>
+    </div>
+    <div class="row">
+      <span class="badge" style="color:var(--accent)">v2.1</span>
+      <div style="width:34px;height:34px;border-radius:999px;background:var(--tonal-2);border:1px solid var(--border);display:grid;place-items:center;font-size:12px;font-weight:700">JD</div>
+    </div>
+  </header>
+
+  <div class="content">
+
+    <!-- TOKENS -->
+    <section id="tokens" class="stack" style="--gap:26px">
+      <div>
+        <h1 class="t-heading section-title">Tokens</h1>
+        <p class="t-body section-desc">Android 17 glass system — tonal layers, deep blur, soft light borders.</p>
+      </div>
+
+      <div>
+        <h2 class="t-subhead" style="margin-bottom:14px">Color</h2>
+        <div class="swatch-grid" id="colorSwatches"></div>
+      </div>
+
+      <div>
+        <h2 class="t-subhead" style="margin-bottom:14px">Glass Tokens</h2>
+        <div class="swatch-grid" id="glassSwatches"></div>
+      </div>
+
+      <div class="glass-strong" style="padding:26px">
+        <h2 class="t-subhead" style="margin-bottom:16px">Typography</h2>
+        <div class="stack" style="--gap:18px">
+          <div class="row-between"><span class="t-display">Display</span><span class="t-mono">clamp(34px, 3.6vw, 60px)</span></div>
+          <div class="row-between"><span class="t-heading">Heading</span><span class="t-mono">clamp(24px, 2.2vw, 38px)</span></div>
+          <div class="row-between"><span class="t-subhead">Subhead</span><span class="t-mono">clamp(18px, 1.4vw, 22px)</span></div>
+          <div class="row-between"><span class="t-body">Body</span><span class="t-mono">14px / 1.6</span></div>
+          <div class="row-between"><span class="caption">Caption</span><span class="t-mono">11px / uppercase</span></div>
+          <div class="row-between"><span class="t-mono">Mono</span><span class="t-mono">12px</span></div>
+        </div>
+      </div>
+
+      <div class="glass" style="padding:26px">
+        <h2 class="t-subhead" style="margin-bottom:16px">Spacing</h2>
+        <div class="stack" style="--gap:10px">
+          <div class="row-between"><span class="t-body">Base unit</span><span class="t-mono">4px</span></div>
+          <div class="row-between"><span class="t-body">xs / sm / md / lg / xl / 2xl</span><span class="t-mono">4 / 8 / 16 / 24 / 32 / 48</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- COMPONENTS -->
+    <section id="components" class="stack" style="--gap:24px; display:none">
+      <div>
+        <h1 class="t-heading section-title">Components</h1>
+        <p class="t-body section-desc">Glass-fluent UI primitives with layered tonal depth.</p>
+      </div>
+
+      <div class="component-grid">
+        <div class="component-box glass">
+          <div class="t-subhead">Buttons</div>
+          <div class="stack" style="--gap:10px">
+            <div class="row"><button class="btn btn-primary">Primary</button><button class="btn btn-primary btn-sm">Small</button></div>
+            <div class="row"><button class="btn btn-secondary">Secondary</button><button class="btn btn-secondary btn-sm">Small</button></div>
+            <div class="row"><button class="btn btn-ghost">Ghost</button><button class="btn btn-ghost btn-sm">Small</button></div>
+          </div>
+        </div>
+
+        <div class="component-box glass">
+          <div class="t-subhead">Inputs</div>
+          <div class="stack" style="--gap:10px">
+            <input class="input" placeholder="Placeholder text">
+            <input class="input" value="Filled value">
+            <input class="input" value="Focused" style="border-color:color-mix(in oklab,var(--accent) 50%,var(--glass-border));box-shadow:0 0 0 3px color-mix(in oklab,var(--accent) 22%,transparent),var(--glass-inset)">
+          </div>
+        </div>
+
+        <div class="component-box glass">
+          <div class="t-subhead">Badges</div>
+          <div class="row" style="flex-wrap:wrap;gap:8px">
+            <span class="badge">Default</span>
+            <span class="badge" style="color:var(--success)">Success</span>
+            <span class="badge" style="color:var(--warn)">Warning</span>
+            <span class="badge" style="color:var(--danger)">Error</span>
+          </div>
+        </div>
+
+        <div class="component-box glass">
+          <div class="t-subhead">Cards</div>
+          <div class="stack" style="--gap:10px">
+            <div class="card">Tonal card</div>
+            <div class="card card-hover">Hover tonal</div>
+            <div class="card-glass">Glass card</div>
+          </div>
+        </div>
+
+        <div class="component-box glass">
+          <div class="t-subhead">Waveform</div>
+          <div class="waveform" id="waveform"></div>
+          <div class="row-between" style="margin-top:14px">
+            <button class="btn btn-ghost btn-sm" onclick="playWave()">Play</button>
+            <span class="t-mono" id="waveTime">00:00 / 00:12</span>
+          </div>
+        </div>
+
+        <div class="component-box glass">
+          <div class="t-subhead">Toggle</div>
+          <div class="row" style="gap:16px">
+            <input type="checkbox" class="toggle">
+            <input type="checkbox" class="toggle" checked>
+          </div>
+        </div>
+      </div>
+
+      <div class="glass" style="padding:26px">
+        <div class="t-subhead" style="margin-bottom:18px">Data Table</div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Project</th><th>Voice</th><th>Duration</th><th>Status</th></tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><div class="row" style="gap:10px"><div style="width:32px;height:32px;border-radius:10px;background:var(--tonal-2);border:1px solid var(--border)"></div><div><div style="font-weight:600">Vietnamese Ad</div><div class="t-body">TTS • 22 Oct</div></div></div></td>
+                <td class="t-body">Bella</td>
+                <td class="t-mono">00:24</td>
+                <td><span class="badge" style="color:var(--success)">Ready</span></td>
+              </tr>
+              <tr>
+                <td><div class="row" style="gap:10px"><div style="width:32px;height:32px;border-radius:10px;background:var(--tonal-2);border:1px solid var(--border)"></div><div><div style="font-weight:600">Product Tour</div><div class="t-body">Speech-to-Speech • 21 Oct</div></div></div></td>
+                <td class="t-body">Adam</td>
+                <td class="t-mono">01:12</td>
+                <td><span class="badge" style="color:var(--warn)">Processing</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- DASHBOARD -->
+    <section id="dashboard" style="display:none">
+      <div class="row-between" style="margin-bottom:26px;flex-wrap:wrap;gap:16px">
+        <div>
+          <h1 class="t-heading section-title">Studio</h1>
+          <p class="t-body">Projects, generations, and voice library.</p>
+        </div>
+        <div class="row">
+          <button class="btn btn-secondary btn-sm">Import</button>
+          <button class="btn btn-primary">New project</button>
+        </div>
+      </div>
+
+      <div class="stats-grid">
+        <div class="stat-card glass"><div class="stat-value" id="statProjects">12</div><div class="stat-label">Active projects</div></div>
+        <div class="stat-card glass"><div class="stat-value" id="statVoices">8</div><div class="stat-label">Voices</div></div>
+        <div class="stat-card glass"><div class="stat-value" id="statChars">1.2M</div><div class="stat-label">Chars generated</div></div>
+        <div class="stat-card glass"><div class="stat-value" id="statHours">48</div><div class="stat-label">Audio hours</div></div>
+      </div>
+
+      <div style="margin-bottom:18px">
+        <div class="tabs" role="tablist">
+          <button class="tab" aria-selected="true" role="tab" onclick="switchTab(this,'tab-projects')">Projects</button>
+          <button class="tab" role="tab" onclick="switchTab(this,'tab-voices')">Voices</button>
+          <button class="tab" role="tab" onclick="switchTab(this,'tab-history')">History</button>
+        </div>
+      </div>
+
+      <div id="tab-projects">
+        <div class="table-wrap" style="margin-bottom:24px">
+          <table>
+            <thead>
+              <tr><th>Project</th><th>Voice</th><th>Last edited</th><th>Duration</th><th style="text-align:right">Actions</th></tr>
+            </thead>
+            <tbody id="projectTable">
+              <tr>
+                <td><div class="row" style="gap:10px"><div style="width:36px;height:36px;border-radius:12px;background:var(--tonal-2);border:1px solid var(--border);display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/></svg></div><div><div style="font-weight:600">Vietnamese TTS</div><div class="t-body">11 voices</div></div></div></td>
+                <td class="t-body">Bella, Adam +9</td>
+                <td class="t-body">2 hours ago</td>
+                <td class="t-mono">04:12</td>
+                <td style="text-align:right"><button class="btn btn-ghost btn-sm">Open</button></td>
+              </tr>
+              <tr>
+                <td><div class="row" style="gap:10px"><div style="width:36px;height:36px;border-radius:12px;background:var(--tonal-2);border:1px solid var(--border);display:grid;place-items:center"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a10 10 0 1 0 10 10H12V2z"/></svg></div><div><div style="font-weight:600">Podcast Intro</div><div class="t-body">3 voices</div></div></div></td>
+                <td class="t-body">Rachel</td>
+                <td class="t-body">Yesterday</td>
+                <td class="t-mono">00:45</td>
+                <td style="text-align:right"><button class="btn btn-ghost btn-sm">Open</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="player">
+          <div class="row-between">
+            <div class="row" style="gap:12px">
+              <button class="btn btn-ghost btn-sm" style="padding:8px" onclick="togglePlay()" id="playBtn">
+                <svg id="iconPlay" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M5 3l18 9-18 9V3z"/></svg>
+                <svg id="iconPause" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display:none"><path d="M5 3h4v18H5zm10 0h4v18h-4z"/></svg>
+              </button>
+              <div>
+                <div style="font-weight:600">Bella — Vietnamese Ad</div>
+                <div class="t-body">Project: Vietnamese TTS</div>
+              </div>
+            </div>
+            <span class="t-mono" id="playerTime">00:00 / 00:24</span>
+          </div>
+          <div class="player-bar"><div class="player-progress" id="playerProgress"></div></div>
+        </div>
+      </div>
+
+      <div id="tab-voices" style="display:none">
+        <div class="component-grid" style="margin-top:8px">
+          <div class="card-glass card-hover">
+            <div class="row-between" style="margin-bottom:12px">
+              <span class="badge">Premium</span>
+              <button class="btn btn-ghost btn-sm" style="padding:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17v3h3M4 4h3v3H4zM14 4h3v3h-3zM14 14h3v3h-3z"/></svg></button>
+            </div>
+            <div class="t-subhead" style="margin-bottom:4px">Bella</div>
+            <div class="t-body">Warm, conversational. Best for storytelling.</div>
+            <div class="waveform" style="margin-top:16px;height:28px;opacity:.7"></div>
+          </div>
+          <div class="card-glass card-hover">
+            <div class="row-between" style="margin-bottom:12px">
+              <span class="badge">Standard</span>
+              <button class="btn btn-ghost btn-sm" style="padding:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17v3h3M4 4h3v3H4zM14 4h3v3h-3zM14 14h3v3h-3z"/></svg></button>
+            </div>
+            <div class="t-subhead" style="margin-bottom:4px">Adam</div>
+            <div class="t-body">Clear, professional. Best for news.</div>
+            <div class="waveform" style="margin-top:16px;height:28px;opacity:.7"></div>
+          </div>
+          <div class="card-glass card-hover">
+            <div class="row-between" style="margin-bottom:12px">
+              <span class="badge">Clone</span>
+              <button class="btn btn-ghost btn-sm" style="padding:6px"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 17v3h3M4 4h3v3H4zM14 4h3v3h-3zM14 14h3v3h-3z"/></svg></button>
+            </div>
+            <div class="t-subhead" style="margin-bottom:4px">Custom Voice A</div>
+            <div class="t-body">User-uploaded clone. Vietnamese-native accent.</div>
+            <div class="waveform" style="margin-top:16px;height:28px;opacity:.7"></div>
+          </div>
+        </div>
+      </div>
+
+      <div id="tab-history" style="display:none">
+        <div class="table-wrap" style="margin-top:8px">
+          <table>
+            <thead>
+              <tr><th>Text</th><th>Voice</th><th>Model</th><th>Time</th></tr>
+            </thead>
+            <tbody>
+              <tr><td class="t-body" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Chào mừng bạn đến với sản phẩm của chúng tôi...</td><td class="t-body">Bella</td><td class="t-mono">eleven_multilingual_v2</td><td class="t-mono">10:42 AM</td></tr>
+              <tr><td class="t-body" style="max-width:300px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">Hôm nay chúng ta sẽ học cách sử dụng công cụ này.</td><td class="t-body">Adam</td><td class="t-mono">eleven_monolingual_v1</td><td class="t-mono">09:15 AM</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </div>
+</main>
+
+<script>
+/* Theme */
+const root=document.documentElement;
+const saved=localStorage.getItem('elevenlabs-theme');
+if(saved==='light'||saved==='dark')root.setAttribute('data-theme',saved);
+document.getElementById('themeToggle').checked=root.getAttribute('data-theme')==='dark';
+
+function toggleTheme(){
+  const isDark=root.getAttribute('data-theme')==='dark';
+  const next=isDark?'light':'dark';
+  root.setAttribute('data-theme',next);
+  localStorage.setItem('elevenlabs-theme',next);
+  buildSwatches();buildGlassSwatches();
+}
+
+/* Nav */
+function goTo(id){
+  document.querySelectorAll('section').forEach(s=>s.style.display='none');
+  document.getElementById(id).style.display='';
+  document.querySelectorAll('.nav-item').forEach(n=>n.removeAttribute('aria-current'));
+  document.querySelector(`.nav-item[data-target="${id}"]`)?.setAttribute('aria-current','page');
+  const labels={tokens:'Tokens',components:'Components',dashboard:'Studio Preview'};
+  document.getElementById('pageLabel').textContent=labels[id];
+  if(window.innerWidth<=1024)closeSidebar();
+}
+function openSidebar(){document.getElementById('sidebar').classList.add('open');document.getElementById('overlay').classList.add('show')}
+function closeSidebar(){document.getElementById('sidebar').classList.remove('open');document.getElementById('overlay').classList.remove('show')}
+
+/* Swatches */
+function buildSwatches(){
+  const vars=[
+    {name:'Background',var:'--bg'},{name:'Tonal 1',var:'--tonal-1'},
+    {name:'Tonal 2',var:'--tonal-2'},{name:'Tonal 3',var:'--tonal-3'},
+    {name:'Foreground',var:'--fg'},{name:'FG 2',var:'--fg-2'},
+    {name:'FG 3',var:'--fg-3'},{name:'Border',var:'--border'},
+    {name:'Accent',var:'--accent'},{name:'Success',var:'--success'},
+    {name:'Warning',var:'--warn'},{name:'Danger',var:'--danger'}
+  ];
+  document.getElementById('colorSwatches').innerHTML=vars.map(v=>{
+    const val=getComputedStyle(root).getPropertyValue(v.var).trim();
+    return `<div class="swatch"><div class="swatch-color" style="background:${val}"></div><div class="swatch-info"><div class="swatch-name">${v.name}</div><div class="swatch-val">${v.var}: ${val}</div></div></div>`;
+  }).join('');
+}
+function buildGlassSwatches(){
+  const vars=[
+    {name:'Glass',var:'--glass'},{name:'Glass Strong',var:'--glass-strong'},
+    {name:'Glass Border',var:'--glass-border'},{name:'Glass Highlight',var:'--glass-highlight'}
+  ];
+  document.getElementById('glassSwatches').innerHTML=vars.map(v=>{
+    const val=getComputedStyle(root).getPropertyValue(v.var).trim();
+    return `<div class="swatch glass"><div class="swatch-color" style="background:${val};border-bottom:1px solid var(--glass-border)"></div><div class="swatch-info"><div class="swatch-name">${v.name}</div><div class="swatch-val">${v.var}: ${val}</div></div></div>`;
+  }).join('');
+}
+buildSwatches();buildGlassSwatches();
+
+/* Waveform */
+function makeBars(parent,count=32){
+  parent.innerHTML='';
+  for(let i=0;i<count;i++){
+    const h=20+Math.random()*80,d=document.createElement('div');
+    d.className='bar';d.style.height=h+'%';d.style.animationDelay=(Math.random()*-1.2)+'s';
+    parent.appendChild(d);
+  }
+}
+makeBars(document.getElementById('waveform'));
+document.querySelectorAll('.waveform').forEach(w=>{if(!w.children.length)makeBars(w,24)});
+
+let waveTimer=null;
+function playWave(){
+  const time=document.getElementById('waveTime');let s=0;
+  if(waveTimer)clearInterval(waveTimer);
+  waveTimer=setInterval(()=>{s++;if(s>12)s=0;const m=String(Math.floor(s/60)).padStart(2,'0'),sec=String(s%60).padStart(2,'0');time.textContent=`${m}:${sec} / 00:12`;},1000);
+}
+
+/* Tabs */
+function switchTab(btn,id){
+  btn.parentElement.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected','false'));
+  btn.setAttribute('aria-selected','true');
+  ['tab-projects','tab-voices','tab-history'].forEach(x=>document.getElementById(x).style.display='none');
+  document.getElementById(id).style.display='';
+}
+
+/* Player */
+let playing=false,playTimer=null;
+function togglePlay(){
+  playing=!playing;
+  document.getElementById('iconPlay').style.display=playing?'none':'';
+  document.getElementById('iconPause').style.display=playing?'':'none';
+  const prog=document.getElementById('playerProgress'),time=document.getElementById('playerTime');
+  let s=10;
+  if(playTimer)clearInterval(playTimer);
+  if(playing){
+    playTimer=setInterval(()=>{
+      s++;const pct=Math.min(100,(s/24)*100);prog.style.width=pct+'%';
+      const m=String(Math.floor(s/60)).padStart(2,'0'),sec=String(s%60).padStart(2,'0');
+      time.textContent=`${m}:${sec} / 00:24`;if(s>=24)togglePlay();
+    },1000);
+  }
+}
+
+/* Responsive */
+function checkSize(){
+  document.getElementById('menuBtn').style.display=window.innerWidth<=1024?'':'none';
+}
+window.addEventListener('resize',checkSize);checkSize();
+
+goTo('tokens');
+</script>
+</body>
+</html>

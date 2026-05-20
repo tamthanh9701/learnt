@@ -78,7 +78,7 @@ export const SettingsPage: React.FC = () => {
               </label>
               <input
                 type="text"
-                className="text-input"
+                className="input"
                 value={displayName}
                 onChange={(e) => setDisplayName(e.target.value)}
                 placeholder="e.g. John Doe"
@@ -92,7 +92,7 @@ export const SettingsPage: React.FC = () => {
               </label>
               <input
                 type="email"
-                className="text-input"
+                className="input"
                 value={user?.email || ''}
                 disabled
                 style={{ opacity: 0.6, cursor: 'not-allowed' }}
@@ -134,7 +134,7 @@ export const SettingsPage: React.FC = () => {
                 step="0.01"
                 min="0.70"
                 max="0.98"
-                className="text-input"
+                className="input"
                 value={retention}
                 onChange={(e) => setRetention(e.target.value)}
               />
@@ -149,7 +149,7 @@ export const SettingsPage: React.FC = () => {
               </label>
               <input
                 type="number"
-                className="text-input"
+                className="input"
                 value={maxInterval}
                 onChange={(e) => setMaxInterval(e.target.value)}
               />

@@ -120,7 +120,7 @@ export const WritingPage: React.FC = () => {
                 return (
                   <button
                     key={p.id}
-                    className={`tab-btn ${isSelected ? 'active' : ''}`}
+                    className={`btn btn-sm ${isSelected ? 'btn-primary' : 'btn-outline'}`}
                     onClick={() => {
                       setSelectedPrompt(p);
                       handleStartNew();
@@ -159,7 +159,7 @@ export const WritingPage: React.FC = () => {
 
             <form onSubmit={handleSubmit} className="flex flex-col flex-1 gap-md">
               <textarea
-                className="essay-textarea flex-1"
+                className="input flex-1"
                 placeholder={isEn ? "Write your essay here... (minimum 10 words)" : "Viết bài luận của bạn tại đây... (tối thiểu 10 từ)"}
                 value={content}
                 onChange={(e) => setContent(e.target.value)}
