@@ -35,7 +35,7 @@ const AppContent: React.FC = () => {
   return (
     <div className="app-layout">
       <Sidebar />
-      <main className="main-content-layout container">
+      <main className="main-content-layout">
         <Routes>
           <Route path="/" element={<DashboardPage />} />
           <Route path="/vocabulary" element={<VocabularyPage />} />
