@@ -23,7 +23,7 @@
   /* Glass Effects */
   --glass: rgba(255,255,255,0.32);
   --glass-strong: rgba(255,255,255,0.52);
-  --glass-border: rgba(255,255,255,0.55);
+  --glass-border: rgba(18,18,22,0.12);
   --glass-highlight: rgba(255,255,255,0.95);
   --glass-shadow: 0 8px 32px rgba(18,18,30,0.06), 0 2px 8px rgba(18,18,30,0.04);
   --glass-inset: inset 0 1px 1px rgba(255,255,255,0.9);
@@ -107,7 +107,7 @@
 
   --glass: rgba(255,255,255,0.055);
   --glass-strong: rgba(255,255,255,0.10);
-  --glass-border: rgba(255,255,255,0.10);
+  --glass-border: rgba(255,255,255,0.20);
   --glass-highlight: rgba(255,255,255,0.18);
   --glass-shadow: 0 12px 40px rgba(0,0,0,0.35), 0 4px 12px rgba(0,0,0,0.25);
   --glass-inset: inset 0 1px 0 rgba(255,255,255,0.08);
