@@ -98,8 +98,11 @@ export const fetchAIConversationResponse = async (
   aiConfig?: AIConfig
 ): Promise<string> => {
   const now = new Date().toISOString();
+  let response = '';
+  let responseGenerated = false;
 
-  // Try real AI provider first
+  // 1. Generate response
+  // Try real AI provider first (if configured)
   if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
     try {
       const systemPrompt = `You are a friendly English conversation tutor. The topic is "${topic}". 
@@ -116,86 +119,115 @@ Keep responses concise (2-4 sentences).`;
         })),
       ];
 
-      const response = await callAIProvider(aiConfig, messages);
-
-      // Save to localStorage
-      const sessions: ConversationSession[] = JSON.parse(
-        localStorage.getItem(`learnt_conversations_${userId}`) || '[]'
-      );
-      let activeSession = sessions.find(s => s.topic === topic);
-      if (!activeSession) {
-        activeSession = { id: `conv-${Date.now()}`, topic, messages: [], created_at: now };
-        sessions.unshift(activeSession);
-      }
-      activeSession.messages = [
-        ...history,
-        { role: 'assistant', content: response, timestamp: now }
-      ];
-      localStorage.setItem(`learnt_conversations_${userId}`, JSON.stringify(sessions));
-
-      return response;
+      response = await callAIProvider(aiConfig, messages);
+      responseGenerated = true;
     } catch (err) {
-      console.warn('AI provider call failed, falling back to mock:', err);
+      console.warn('AI provider call failed, falling back:', err);
     }
   }
 
-  if (isMock) {
-    return new Promise((resolve) => {
-      setTimeout(() => {
-        const response = getMockAIResponse(topic, history);
-        
-        // Save message history to localStorage
-        const sessions: ConversationSession[] = JSON.parse(
-          localStorage.getItem(`learnt_conversations_${userId}`) || '[]'
-        );
-        
-        let activeSession = sessions.find(s => s.topic === topic);
-        if (!activeSession) {
-          activeSession = {
-            id: `conv-${Date.now()}`,
-            topic,
-            messages: [],
-            created_at: now,
-          };
-          sessions.unshift(activeSession);
-        }
-        
-        activeSession.messages = [
-          ...history,
-          { role: 'assistant', content: response, timestamp: now }
-        ];
-        
-        localStorage.setItem(`learnt_conversations_${userId}`, JSON.stringify(sessions));
-        resolve(response);
-      }, 800);
-    });
-  } else {
+  // Try Edge function if not mock and AI provider was not called/failed
+  if (!responseGenerated && !isMock) {
     try {
       const { data, error } = await supabase.functions.invoke('ai-conversation', {
         body: { topic, history },
       });
-
       if (error) throw error;
-      
-      const response = data.reply;
-
-      // Save to database logic
-      const { error: dbError } = await supabase
-        .from('speaking_sessions')
-        .insert({
-          learner_id: userId,
-          topic,
-          dialogue_history: [...history, { role: 'assistant', content: response, timestamp: now }]
-        });
-      
-      if (dbError) throw dbError;
-
-      return response;
+      response = data.reply;
+      responseGenerated = true;
     } catch (err) {
-      console.warn('ai-conversation Edge function not deployed, fallback to Mock responder:', err);
-      return fetchAIConversationResponse(userId, topic, history, true);
+      console.warn('ai-conversation Edge function failed/not deployed, falling back:', err);
     }
   }
+
+  // Fallback to local mock response
+  if (!responseGenerated) {
+    response = await new Promise<string>((resolve) => {
+      setTimeout(() => {
+        resolve(getMockAIResponse(topic, history));
+      }, 600);
+    });
+  }
+
+  // 2. Save dialogue history
+  const fullHistory: ChatMessage[] = [...history, { role: 'assistant' as const, content: response, timestamp: now }];
+
+  if (isMock) {
+    // Save to localStorage
+    const sessions: ConversationSession[] = JSON.parse(
+      localStorage.getItem(`learnt_conversations_${userId}`) || '[]'
+    );
+    let activeSession = sessions.find(s => s.topic === topic);
+    if (!activeSession) {
+      activeSession = { id: `conv-${Date.now()}`, topic, messages: [], created_at: now };
+      sessions.unshift(activeSession);
+    }
+    activeSession.messages = fullHistory;
+    localStorage.setItem(`learnt_conversations_${userId}`, JSON.stringify(sessions));
+
+    // Update localStorage progress
+    const today = now.split('T')[0];
+    const progressKey = `learnt_progress_${userId}_${today}`;
+    const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "speaking_minutes": 0}');
+    progress.speaking_minutes = (progress.speaking_minutes || 0) + 1;
+    localStorage.setItem(progressKey, JSON.stringify(progress));
+  } else {
+    // Save to Supabase speaking_sessions table
+    try {
+      // Check if session already exists for this topic to update, otherwise insert
+      const { data: existingSessions } = await supabase
+        .from('speaking_sessions')
+        .select('id')
+        .eq('learner_id', userId)
+        .eq('topic', topic)
+        .order('created_at', { ascending: false });
+
+      if (existingSessions && existingSessions.length > 0) {
+        // Update the most recent session
+        const { error: dbError } = await supabase
+          .from('speaking_sessions')
+          .update({ dialogue_history: fullHistory })
+          .eq('id', existingSessions[0].id);
+        if (dbError) throw dbError;
+      } else {
+        // Insert new session
+        const { error: dbError } = await supabase
+          .from('speaking_sessions')
+          .insert({
+            learner_id: userId,
+            topic,
+            dialogue_history: fullHistory
+          });
+        if (dbError) throw dbError;
+      }
+
+      // Update daily_progress in Supabase
+      const today = now.split('T')[0];
+      const { data: progress, error: progErr } = await supabase
+        .from('daily_progress')
+        .select('*')
+        .eq('learner_id', userId)
+        .eq('activity_date', today)
+        .single();
+
+      if (!progErr && progress) {
+        await supabase
+          .from('daily_progress')
+          .update({ speaking_minutes: (progress.speaking_minutes || 0) + 1 })
+          .eq('id', progress.id);
+      } else {
+        await supabase.from('daily_progress').insert({
+          learner_id: userId,
+          activity_date: today,
+          speaking_minutes: 1,
+        });
+      }
+    } catch (dbErr) {
+      console.error('Error saving conversation session to Supabase:', dbErr);
+    }
+  }
+
+  return response;
 };
 
 /**

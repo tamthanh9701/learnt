@@ -163,10 +163,11 @@ export const submitWritingContent = async (
 ): Promise<WritingSubmission> => {
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const now = new Date().toISOString();
+  let aiFeedback: WritingFeedback | null = null;
+  let feedbackGenerated = false;
 
-  let aiFeedback: WritingFeedback;
-
-  // Try real AI provider first
+  // 1. Generate feedback
+  // Try real AI provider first (if configured)
   if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
     try {
       const systemPrompt = `You are an English writing tutor. Analyze the student's essay and return a JSON object (no markdown fences) with this exact structure:
@@ -189,34 +190,33 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
       // Parse JSON from reply (handle potential markdown fences)
       const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
       aiFeedback = JSON.parse(jsonStr) as WritingFeedback;
-
-      // Save submission to localStorage
-      const submissions: WritingSubmission[] = JSON.parse(
-        localStorage.getItem(`learnt_writing_submissions_${userId}`) || '[]'
-      );
-      const newSubmission: WritingSubmission = {
-        id: `write-${Date.now()}`, prompt, content,
-        word_count: wordCount, ai_feedback: aiFeedback, created_at: now,
-      };
-      submissions.unshift(newSubmission);
-      localStorage.setItem(`learnt_writing_submissions_${userId}`, JSON.stringify(submissions));
-
-      const today = now.split('T')[0];
-      const progressKey = `learnt_progress_${userId}_${today}`;
-      const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "writing_count": 0}');
-      progress.writing_count = (progress.writing_count || 0) + 1;
-      localStorage.setItem(progressKey, JSON.stringify(progress));
-
-      return newSubmission;
+      feedbackGenerated = true;
     } catch (err) {
       console.warn('AI provider call failed for writing feedback, falling back:', err);
     }
   }
 
-  if (isMock) {
-    // Generate realistic AI feedback on client side
-    aiFeedback = analyzeGrammarMock(content);
+  // Try Edge function if not mock and AI provider was not called/failed
+  if (!feedbackGenerated && !isMock) {
+    try {
+      const { data, error: funcError } = await supabase.functions.invoke('ai-writing-feedback', {
+        body: { prompt, content },
+      });
+      if (funcError) throw funcError;
+      aiFeedback = data.feedback;
+      feedbackGenerated = true;
+    } catch (err) {
+      console.warn('Supabase Edge Function failed or not deployed, falling back:', err);
+    }
+  }
 
+  // Fallback to local mock analysis
+  if (!feedbackGenerated || !aiFeedback) {
+    aiFeedback = analyzeGrammarMock(content);
+  }
+
+  // 2. Save submission
+  if (isMock) {
     // Save mock submission to localStorage
     const submissions: WritingSubmission[] = JSON.parse(
       localStorage.getItem(`learnt_writing_submissions_${userId}`) || '[]'
@@ -232,7 +232,7 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
     submissions.unshift(newSubmission); // Newest first
     localStorage.setItem(`learnt_writing_submissions_${userId}`, JSON.stringify(submissions));
 
-    // Update daily progress counter
+    // Update daily progress counter in localStorage
     const today = now.split('T')[0];
     const progressKey = `learnt_progress_${userId}_${today}`;
     const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "writing_count": 0}');
@@ -241,17 +241,8 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
 
     return newSubmission;
   } else {
-    // Supabase implementation: invoke edge function
+    // Save to writing_submissions table in Supabase
     try {
-      const { data, error: funcError } = await supabase.functions.invoke('ai-writing-feedback', {
-        body: { prompt, content },
-      });
-
-      if (funcError) throw funcError;
-      
-      aiFeedback = data.feedback;
-
-      // Save to writing_submissions table
       const { data: dbData, error: dbError } = await supabase
         .from('writing_submissions')
         .insert({
@@ -297,9 +288,16 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
         created_at: dbData.created_at,
       };
     } catch (err) {
-      console.warn('Supabase Edge Function failed or not deployed, using client-side AI analysis fallback:', err);
-      // Fallback to client-side analysis
-      return submitWritingContent(userId, prompt, content, true);
+      console.error('Failed to save writing submission to Supabase:', err);
+      // If saving to Supabase fails, return a simulated response as fallback
+      return {
+        id: `write-${Date.now()}`,
+        prompt,
+        content,
+        word_count: wordCount,
+        ai_feedback: aiFeedback,
+        created_at: now,
+      };
     }
   }
 };

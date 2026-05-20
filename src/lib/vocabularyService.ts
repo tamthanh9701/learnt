@@ -452,10 +452,32 @@ export const submitCardReview = async (
     };
 
     // Upsert card status
-    const { error: upsertErr } = await supabase
+    const { data: lcRow, error: upsertErr } = await supabase
       .from('learner_cards')
-      .upsert(savedRecord, { onConflict: 'learner_id,card_id' });
+      .upsert(savedRecord, { onConflict: 'learner_id,card_id' })
+      .select('id')
+      .single();
     if (upsertErr) throw upsertErr;
+
+    // Log the review action in review_logs table
+    if (lcRow) {
+      const { error: logErr } = await supabase
+        .from('review_logs')
+        .insert({
+          learner_id: userId,
+          learner_card_id: lcRow.id,
+          rating: rating,
+          state: nextCardState.state,
+          due: nextCardState.due.toISOString(),
+          stability: nextCardState.stability,
+          difficulty: nextCardState.difficulty,
+          elapsed_days: nextCardState.elapsed_days,
+          scheduled_days: nextCardState.scheduled_days,
+        });
+      if (logErr) {
+        console.warn('Could not write to review_logs table:', logErr);
+      }
+    }
 
     // Call Supabase daily_progress tracker
     const today = now.toISOString().split('T')[0];

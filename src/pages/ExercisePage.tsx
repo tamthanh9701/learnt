@@ -3,12 +3,12 @@ import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
-import { fetchExercisesForTopic } from '../lib/exerciseService';
+import { fetchExercisesForTopic, recordExerciseCompletion } from '../lib/exerciseService';
 import type { ExerciseQuestion } from '../lib/exerciseService';
 import { ChevronLeft, Check, X, AlertCircle, HelpCircle, Award, RefreshCw, ArrowRight } from 'lucide-react';
 
 export const ExercisePage: React.FC = () => {
-  const { isMock } = useAuth();
+  const { user, isMock } = useAuth();
   const { locale, t } = useLanguage();
   const { config: aiConfig } = useAI();
   const navigate = useNavigate();
@@ -107,6 +107,9 @@ export const ExercisePage: React.FC = () => {
       setCurrentIndex(prev => prev + 1);
       resetInteraction();
     } else {
+      if (user) {
+        recordExerciseCompletion(user.id, isMock);
+      }
       setSessionCompleted(true);
     }
   };

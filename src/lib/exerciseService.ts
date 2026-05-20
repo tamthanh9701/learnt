@@ -32,7 +32,7 @@ export interface TopicExercises {
 }
 
 export const seedExercises: Record<string, ExerciseQuestion[]> = {
-  'tech-1': [
+  'topic-technology': [
     {
       id: 'ex-tech-1',
       type: 'mcq',
@@ -64,7 +64,7 @@ export const seedExercises: Record<string, ExerciseQuestion[]> = {
       explanation_vi: 'Thứ tự đúng tạo thành: "A computer executes an algorithm every second." (Một máy tính thực thi một thuật toán mỗi giây.)'
     }
   ],
-  'edu-1': [
+  'topic-business': [
     {
       id: 'ex-edu-1',
       type: 'mcq',
@@ -212,3 +212,46 @@ Make exercises relevant, educational, and at intermediate English level.`;
     }
   }
 };
+
+/**
+ * Records exercise completion in the daily progress table/local storage.
+ */
+export const recordExerciseCompletion = async (
+  userId: string,
+  isMock: boolean
+): Promise<void> => {
+  const now = new Date().toISOString();
+  const today = now.split('T')[0];
+
+  if (isMock) {
+    const progressKey = `learnt_progress_${userId}_${today}`;
+    const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "exercises_completed": 0}');
+    progress.exercises_completed = (progress.exercises_completed || 0) + 1;
+    localStorage.setItem(progressKey, JSON.stringify(progress));
+  } else {
+    try {
+      const { data: progress, error: progErr } = await supabase
+        .from('daily_progress')
+        .select('*')
+        .eq('learner_id', userId)
+        .eq('activity_date', today)
+        .single();
+
+      if (!progErr && progress) {
+        await supabase
+          .from('daily_progress')
+          .update({ exercises_completed: (progress.exercises_completed || 0) + 1 })
+          .eq('id', progress.id);
+      } else {
+        await supabase.from('daily_progress').insert({
+          learner_id: userId,
+          activity_date: today,
+          exercises_completed: 1,
+        });
+      }
+    } catch (err) {
+      console.error('Error saving exercise completion to Supabase:', err);
+    }
+  }
+};
+

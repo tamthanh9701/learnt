@@ -22,7 +22,7 @@ export const DashboardPage: React.FC = () => {
       try {
         if (isMock) {
           // Simulate loading mock data from localStorage
-          const savedCards = localStorage.getItem(`learnt_cards_${user.id}`);
+          const savedCards = localStorage.getItem(`learnt_learner_cards_${user.id}`);
           let due = 0;
           if (savedCards) {
             const cards = JSON.parse(savedCards);

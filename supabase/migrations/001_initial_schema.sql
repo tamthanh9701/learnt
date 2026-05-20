@@ -12,7 +12,7 @@ create table if not exists public.profiles (
 
 -- Topics (seed data)
 create table if not exists public.topics (
-  id uuid primary key default gen_random_uuid(),
+  id text primary key,
   name_en text not null,
   name_vi text not null,
   description_en text,
@@ -25,14 +25,15 @@ create table if not exists public.topics (
 
 -- Flashcards (seed data — belongs to a Topic)
 create table if not exists public.flashcards (
-  id uuid primary key default gen_random_uuid(),
-  topic_id uuid not null references topics(id) on delete cascade,
+  id text primary key,
+  topic_id text not null references topics(id) on delete cascade,
   word text not null,                  -- English word
-  pronunciation text,                  -- IPA pronunciation
+  phonetic text,                       -- IPA pronunciation (was pronunciation)
   part_of_speech text,                 -- noun, verb, adj, etc.
-  meaning_vi text not null,            -- Vietnamese meaning
-  example_sentence text,               -- Example in English
-  example_translation text,            -- Example translated to Vietnamese
+  definition_en text,                  -- definition in English (was meaning_vi)
+  definition_vi text not null,         -- Vietnamese meaning
+  example_en text,                     -- Example in English (was example_sentence)
+  example_vi text,                     -- Example translated to Vietnamese (was example_translation)
   audio_url text,                      -- URL to pronunciation audio (optional)
   display_order integer default 0,
   created_at timestamptz default now()
@@ -42,7 +43,7 @@ create table if not exists public.flashcards (
 create table if not exists public.learner_cards (
   id uuid primary key default gen_random_uuid(),
   learner_id uuid not null references profiles(id) on delete cascade,
-  flashcard_id uuid not null references flashcards(id) on delete cascade,
+  card_id text not null references flashcards(id) on delete cascade, -- was flashcard_id uuid
   state smallint default 0,            -- 0=New, 1=Learning, 2=Review, 3=Relearning
   due timestamptz default now(),
   stability real default 0,
@@ -53,7 +54,7 @@ create table if not exists public.learner_cards (
   lapses integer default 0,
   last_review timestamptz,
   created_at timestamptz default now(),
-  unique(learner_id, flashcard_id)
+  unique(learner_id, card_id)
 );
 
 -- Review Logs (history of each review action)
@@ -82,12 +83,12 @@ create table if not exists public.writing_submissions (
   created_at timestamptz default now()
 );
 
--- Conversation Sessions
-create table if not exists public.conversation_sessions (
+-- Speaking Sessions (was conversation_sessions)
+create table if not exists public.speaking_sessions (
   id uuid primary key default gen_random_uuid(),
   learner_id uuid not null references profiles(id) on delete cascade,
-  scenario text,                       -- conversation scenario/topic
-  messages jsonb default '[]',         -- array of { role, content, timestamp }
+  topic text,                          -- scenario topic
+  dialogue_history jsonb default '[]', -- dialogue history (was messages)
   duration_seconds integer,
   created_at timestamptz default now()
 );
@@ -111,7 +112,7 @@ alter table public.profiles enable row level security;
 alter table public.learner_cards enable row level security;
 alter table public.review_logs enable row level security;
 alter table public.writing_submissions enable row level security;
-alter table public.conversation_sessions enable row level security;
+alter table public.speaking_sessions enable row level security;
 alter table public.daily_progress enable row level security;
 
 -- Drop existing policies if any to avoid migration errors
@@ -121,7 +122,7 @@ drop policy if exists "Users can insert own profile" on public.profiles;
 drop policy if exists "Users can manage own cards" on public.learner_cards;
 drop policy if exists "Users can manage own reviews" on public.review_logs;
 drop policy if exists "Users can manage own writing" on public.writing_submissions;
-drop policy if exists "Users can manage own conversations" on public.conversation_sessions;
+drop policy if exists "Users can manage own conversations" on public.speaking_sessions;
 drop policy if exists "Users can manage own progress" on public.daily_progress;
 drop policy if exists "Anyone can read topics" on public.topics;
 drop policy if exists "Anyone can read flashcards" on public.flashcards;
@@ -134,7 +135,7 @@ create policy "Users can insert own profile" on public.profiles for insert with 
 create policy "Users can manage own cards" on public.learner_cards for all using (auth.uid() = learner_id);
 create policy "Users can manage own reviews" on public.review_logs for all using (auth.uid() = learner_id);
 create policy "Users can manage own writing" on public.writing_submissions for all using (auth.uid() = learner_id);
-create policy "Users can manage own conversations" on public.conversation_sessions for all using (auth.uid() = learner_id);
+create policy "Users can manage own conversations" on public.speaking_sessions for all using (auth.uid() = learner_id);
 create policy "Users can manage own progress" on public.daily_progress for all using (auth.uid() = learner_id);
 
 -- Topics and Flashcards are public (read-only for all users)
