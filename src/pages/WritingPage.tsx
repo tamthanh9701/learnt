@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAI } from '../contexts/AIContext';
 import {
   submitWritingContent,
   fetchWritingSubmissions,
@@ -12,6 +13,7 @@ import { PenTool, CheckCircle, ChevronRight, History, Sparkles, MessageSquare, A
 export const WritingPage: React.FC = () => {
   const { user, isMock } = useAuth();
   const { locale, t } = useLanguage();
+  const { config: aiConfig } = useAI();
 
   const [prompts] = useState<WritingPrompt[]>(seedWritingPrompts);
   const [selectedPrompt, setSelectedPrompt] = useState<WritingPrompt>(seedWritingPrompts[0]);
@@ -51,7 +53,7 @@ export const WritingPage: React.FC = () => {
     try {
       setSubmitting(true);
       const promptTitle = locale === 'en' ? selectedPrompt.title_en : selectedPrompt.title_vi;
-      const submission = await submitWritingContent(user.id, promptTitle, content, isMock);
+      const submission = await submitWritingContent(user.id, promptTitle, content, isMock, aiConfig);
       setCurrentFeedback(submission);
       
       // Add to list history

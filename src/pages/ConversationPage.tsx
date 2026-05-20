@@ -2,9 +2,11 @@ import React, { useEffect, useState, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAI } from '../contexts/AIContext';
+import { PROVIDER_LABELS } from '../lib/aiClient';
 import { fetchAIConversationResponse, fetchSpeakingSessionsHistory } from '../lib/speakingService';
 import type { ChatMessage } from '../lib/speakingService';
-import { Mic, MicOff, Send, Volume2, ChevronLeft, User, Sparkles, RefreshCw, AlertCircle } from 'lucide-react';
+import { Mic, MicOff, Send, Volume2, ChevronLeft, User, Sparkles, RefreshCw, AlertCircle, Bot } from 'lucide-react';
 
 // Extend window for Web Speech API types
 interface SpeechRecognitionEvent extends Event {
@@ -45,6 +47,7 @@ interface SpeechRecognitionInstance extends EventTarget {
 export const ConversationPage: React.FC = () => {
   const { user, isMock } = useAuth();
   const { locale, t } = useLanguage();
+  const { config: aiConfig, isConfigured: aiIsConfigured } = useAI();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -191,7 +194,7 @@ export const ConversationPage: React.FC = () => {
     setSubmitting(true);
 
     try {
-      const aiReply = await fetchAIConversationResponse(user.id, topic, updatedHistory, isMock);
+      const aiReply = await fetchAIConversationResponse(user.id, topic, updatedHistory, isMock, aiConfig);
       
       setMessages(prev => [
         ...prev,
@@ -239,7 +242,25 @@ export const ConversationPage: React.FC = () => {
           <ChevronLeft size={16} />
           <span>{t('common.back')}</span>
         </button>
-        <h1 className="title-sm">{isEn ? 'AI Speaking Partner' : 'Gia sư luyện nói AI'}</h1>
+        <div className="flex align-center gap-xs">
+          <h1 className="title-sm">{isEn ? 'AI Speaking Partner' : 'Gia sư luyện nói AI'}</h1>
+          <span 
+            className="body-xs font-semibold"
+            style={{ 
+              background: aiIsConfigured ? 'var(--primary)' : 'var(--bg-surface-hover)',
+              color: aiIsConfigured ? 'var(--accent-text)' : 'var(--text-tertiary)',
+              padding: '2px 8px', 
+              borderRadius: 'var(--radius-full)',
+              fontSize: '10px',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '4px',
+            }}
+          >
+            <Bot size={10} />
+            {aiIsConfigured ? PROVIDER_LABELS[aiConfig.provider] : 'Mock'}
+          </span>
+        </div>
       </div>
 
       {!activeSessionStarted ? (

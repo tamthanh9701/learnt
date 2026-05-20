@@ -1,11 +1,23 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { Settings, User, Database, Trash2, ShieldAlert, Check } from 'lucide-react';
+import { useAI } from '../contexts/AIContext';
+import { PROVIDER_MODELS, PROVIDER_LABELS } from '../lib/aiClient';
+import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
+import { Settings, User, Database, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi } from 'lucide-react';
+
+const AI_PROVIDERS: { value: AIProviderType; label: string }[] = [
+  { value: 'none', label: PROVIDER_LABELS.none },
+  { value: 'gemini', label: PROVIDER_LABELS.gemini },
+  { value: 'openai', label: PROVIDER_LABELS.openai },
+  { value: 'anthropic', label: PROVIDER_LABELS.anthropic },
+  { value: 'ollama', label: PROVIDER_LABELS.ollama },
+];
 
 export const SettingsPage: React.FC = () => {
   const { user, profile, updateProfile, isMock } = useAuth();
   const { locale, t } = useLanguage();
+  const { config: savedConfig, updateConfig, isConfigured } = useAI();
 
   const [displayName, setDisplayName] = useState(profile?.display_name || user?.email?.split('@')[0] || '');
   const [updating, setUpdating] = useState(false);
@@ -15,7 +27,38 @@ export const SettingsPage: React.FC = () => {
   const [retention, setRetention] = useState('0.90');
   const [maxInterval, setMaxInterval] = useState('36500');
 
+  // AI Config local state
+  const [aiProvider, setAiProvider] = useState<AIProviderType>(savedConfig.provider);
+  const [aiApiKey, setAiApiKey] = useState(savedConfig.apiKey);
+  const [aiModel, setAiModel] = useState(savedConfig.model);
+  const [aiOllamaUrl, setAiOllamaUrl] = useState(savedConfig.ollamaBaseUrl || 'http://localhost:11434');
+  const [showApiKey, setShowApiKey] = useState(false);
+  const [aiSaving, setAiSaving] = useState(false);
+  const [aiSaved, setAiSaved] = useState(false);
+  const [aiTesting, setAiTesting] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
   const isEn = locale === 'en';
+
+  // Sync local state when savedConfig changes (e.g. on initial load)
+  useEffect(() => {
+    setAiProvider(savedConfig.provider);
+    setAiApiKey(savedConfig.apiKey);
+    setAiModel(savedConfig.model);
+    setAiOllamaUrl(savedConfig.ollamaBaseUrl || 'http://localhost:11434');
+  }, [savedConfig]);
+
+  // Auto-select first model when provider changes
+  useEffect(() => {
+    const models = PROVIDER_MODELS[aiProvider];
+    if (models.length > 0 && !models.some(m => m.value === aiModel)) {
+      setAiModel(models[0].value);
+    }
+    if (aiProvider === 'none') {
+      setAiModel('');
+      setAiApiKey('');
+    }
+  }, [aiProvider]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -34,12 +77,58 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  const handleSaveAIConfig = async () => {
+    setAiSaving(true);
+    setAiSaved(false);
+    setAiTestResult(null);
+    try {
+      const newConfig: AIConfig = {
+        provider: aiProvider,
+        apiKey: aiApiKey,
+        model: aiModel,
+        ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
+      };
+      await updateConfig(newConfig);
+      setAiSaved(true);
+      setTimeout(() => setAiSaved(false), 3000);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setAiSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setAiTesting(true);
+    setAiTestResult(null);
+    try {
+      // Save first so the context uses the latest config
+      const newConfig: AIConfig = {
+        provider: aiProvider,
+        apiKey: aiApiKey,
+        model: aiModel,
+        ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
+      };
+      await updateConfig(newConfig);
+
+      // Small delay to let context update
+      await new Promise(r => setTimeout(r, 200));
+
+      const { testAIConnection } = await import('../lib/aiClient');
+      const reply = await testAIConnection(newConfig);
+      setAiTestResult({ success: true, message: reply.slice(0, 200) });
+    } catch (err: any) {
+      setAiTestResult({ success: false, message: err.message || 'Connection failed' });
+    } finally {
+      setAiTesting(false);
+    }
+  };
+
   const handleResetLocalStorage = () => {
     if (window.confirm(isEn 
       ? 'Are you sure you want to delete all local progress, words learned, and writing submissions? This cannot be undone.'
       : 'Bạn có chắc chắn muốn xoá toàn bộ tiến trình học tập, từ vựng và bài viết trên máy? Việc này không thể hoàn tác.')) {
       
-      // Clear key prefixed records
       const keysToRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
@@ -55,6 +144,10 @@ export const SettingsPage: React.FC = () => {
       window.location.reload();
     }
   };
+
+  const availableModels = PROVIDER_MODELS[aiProvider] || [];
+  const needsApiKey = aiProvider !== 'none' && aiProvider !== 'ollama';
+  const needsOllamaUrl = aiProvider === 'ollama';
 
   return (
     <div className="settings-container animate-fade-in" style={{ maxWidth: '680px', margin: '0 auto' }}>
@@ -114,7 +207,188 @@ export const SettingsPage: React.FC = () => {
           </form>
         </div>
 
-        {/* Section 2: FSRS Custom Options */}
+        {/* Section 2: AI Configuration */}
+        <div className="card settings-card">
+          <h2 className="title-xs flex align-center gap-xs" style={{ marginBottom: 'var(--spacing-sm)' }}>
+            <Bot size={16} className="text-primary" />
+            <span>{isEn ? 'AI Configuration' : 'Cấu hình AI'}</span>
+            {isConfigured && (
+              <span 
+                className="body-xs font-semibold"
+                style={{ 
+                  marginLeft: 'auto',
+                  background: 'var(--primary)', 
+                  color: 'var(--accent-text)', 
+                  padding: '2px 8px', 
+                  borderRadius: 'var(--radius-full)',
+                  fontSize: '10px',
+                }}
+              >
+                {PROVIDER_LABELS[savedConfig.provider]} • {savedConfig.model}
+              </span>
+            )}
+          </h2>
+          <p className="body-xs text-secondary" style={{ marginBottom: 'var(--spacing-md)' }}>
+            {isEn 
+              ? 'Configure an AI provider to enable real-time AI features (conversation, writing feedback, exercise generation). Without AI, the app uses local mock data.'
+              : 'Cấu hình nhà cung cấp AI để bật các tính năng AI thời gian thực (hội thoại, chấm bài, sinh bài tập). Nếu không có AI, ứng dụng dùng dữ liệu giả lập.'}
+          </p>
+
+          <div className="flex flex-col gap-md">
+            {/* Provider Selector */}
+            <div className="input-group">
+              <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                {isEn ? 'AI Provider' : 'Nhà cung cấp AI'}
+              </label>
+              <select
+                className="input"
+                value={aiProvider}
+                onChange={(e) => setAiProvider(e.target.value as AIProviderType)}
+              >
+                {AI_PROVIDERS.map(p => (
+                  <option key={p.value} value={p.value}>{p.label}</option>
+                ))}
+              </select>
+            </div>
+
+            {/* API Key */}
+            {needsApiKey && (
+              <div className="input-group">
+                <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                  API Key
+                </label>
+                <div className="flex gap-xs" style={{ position: 'relative' }}>
+                  <input
+                    type={showApiKey ? 'text' : 'password'}
+                    className="input flex-1"
+                    value={aiApiKey}
+                    onChange={(e) => setAiApiKey(e.target.value)}
+                    placeholder={`${isEn ? 'Enter your' : 'Nhập'} ${PROVIDER_LABELS[aiProvider]} API key`}
+                    style={{ paddingRight: '40px' }}
+                  />
+                  <button 
+                    type="button"
+                    className="btn btn-outline btn-xs flex align-center justify-center"
+                    onClick={() => setShowApiKey(!showApiKey)}
+                    style={{ position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', padding: '6px' }}
+                    title={showApiKey ? 'Hide' : 'Show'}
+                  >
+                    {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+                <span className="body-xs text-tertiary" style={{ marginTop: '4px', display: 'block' }}>
+                  {isEn 
+                    ? 'Your API key is stored securely and never shared. It is sent directly from your browser to the AI provider.'
+                    : 'API key được lưu trữ an toàn và không bao giờ bị chia sẻ. Nó được gửi trực tiếp từ trình duyệt của bạn đến nhà cung cấp AI.'}
+                </span>
+              </div>
+            )}
+
+            {/* Ollama Base URL */}
+            {needsOllamaUrl && (
+              <div className="input-group">
+                <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                  Ollama Base URL
+                </label>
+                <input
+                  type="text"
+                  className="input"
+                  value={aiOllamaUrl}
+                  onChange={(e) => setAiOllamaUrl(e.target.value)}
+                  placeholder="http://localhost:11434"
+                />
+                <span className="body-xs text-tertiary" style={{ marginTop: '4px', display: 'block' }}>
+                  {isEn 
+                    ? 'URL of your Ollama server. Default: http://localhost:11434'
+                    : 'URL máy chủ Ollama của bạn. Mặc định: http://localhost:11434'}
+                </span>
+              </div>
+            )}
+
+            {/* Model Selector */}
+            {aiProvider !== 'none' && (
+              <div className="input-group">
+                <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                  {isEn ? 'Model' : 'Mô hình AI'}
+                </label>
+                <select
+                  className="input"
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                >
+                  {availableModels.map(m => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Test result banner */}
+            {aiTestResult && (
+              <div 
+                className="flex align-center gap-xs" 
+                style={{ 
+                  padding: '8px 12px', 
+                  borderRadius: 'var(--radius-md)',
+                  background: aiTestResult.success ? 'color-mix(in srgb, var(--success) 12%, transparent)' : 'color-mix(in srgb, var(--error) 12%, transparent)',
+                  border: `1px solid ${aiTestResult.success ? 'var(--success)' : 'var(--error)'}`,
+                }}
+              >
+                {aiTestResult.success 
+                  ? <CheckCircle size={14} style={{ color: 'var(--success)', flexShrink: 0 }} />
+                  : <AlertCircle size={14} style={{ color: 'var(--error)', flexShrink: 0 }} />
+                }
+                <span className="body-xs" style={{ color: aiTestResult.success ? 'var(--success)' : 'var(--error)', wordBreak: 'break-word' }}>
+                  {aiTestResult.message}
+                </span>
+              </div>
+            )}
+
+            {/* Action buttons */}
+            {aiProvider !== 'none' && (
+              <div className="flex gap-sm justify-end flex-wrap">
+                <button
+                  className="btn btn-outline btn-xs flex align-center gap-xs"
+                  onClick={handleTestConnection}
+                  disabled={aiTesting || (!aiApiKey && needsApiKey) || !aiModel}
+                >
+                  {aiTesting 
+                    ? <><Loader2 size={14} className="spin" /> <span>{isEn ? 'Testing...' : 'Đang kiểm tra...'}</span></>
+                    : <><Wifi size={14} /> <span>{isEn ? 'Test Connection' : 'Kiểm tra kết nối'}</span></>
+                  }
+                </button>
+
+                <button 
+                  className="btn btn-primary btn-xs flex align-center gap-xs" 
+                  onClick={handleSaveAIConfig}
+                  disabled={aiSaving || (!aiApiKey && needsApiKey) || !aiModel}
+                >
+                  {aiSaving 
+                    ? <><Loader2 size={14} className="spin" /> <span>{isEn ? 'Saving...' : 'Đang lưu...'}</span></>
+                    : aiSaved
+                      ? <><Check size={14} /> <span>{isEn ? 'Saved!' : 'Đã lưu!'}</span></>
+                      : <span>{isEn ? 'Save AI Config' : 'Lưu cấu hình AI'}</span>
+                  }
+                </button>
+              </div>
+            )}
+
+            {/* Save for none mode (reset) */}
+            {aiProvider === 'none' && isConfigured && (
+              <div className="flex justify-end">
+                <button 
+                  className="btn btn-outline btn-xs" 
+                  onClick={handleSaveAIConfig}
+                  disabled={aiSaving}
+                >
+                  {isEn ? 'Switch to Mock Mode' : 'Chuyển sang chế độ giả lập'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Section 3: FSRS Custom Options */}
         <div className="card settings-card">
           <h2 className="title-xs flex align-center gap-xs" style={{ marginBottom: 'var(--spacing-sm)' }}>
             <Database size={16} className="text-secondary" />
@@ -169,7 +443,7 @@ export const SettingsPage: React.FC = () => {
           </div>
         </div>
 
-        {/* Section 3: Storage & Database Sync */}
+        {/* Section 4: Storage & Database Sync */}
         <div className="card settings-card">
           <h2 className="title-xs flex align-center gap-xs" style={{ marginBottom: 'var(--spacing-md)' }}>
             <ShieldAlert size={16} className="text-error" />

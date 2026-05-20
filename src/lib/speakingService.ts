@@ -1,4 +1,7 @@
 import { supabase } from './supabase';
+import { callAIProvider } from './aiClient';
+import type { AIConfig } from './aiClient';
+import type { ChatMessage as AIChatMessage } from './aiClient';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -91,9 +94,50 @@ export const fetchAIConversationResponse = async (
   userId: string,
   topic: string,
   history: ChatMessage[],
-  isMock: boolean
+  isMock: boolean,
+  aiConfig?: AIConfig
 ): Promise<string> => {
   const now = new Date().toISOString();
+
+  // Try real AI provider first
+  if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
+    try {
+      const systemPrompt = `You are a friendly English conversation tutor. The topic is "${topic}". 
+Keep your responses conversational, encouraging, and at an intermediate English level. 
+Ask follow-up questions to keep the conversation flowing.
+Gently correct any grammar mistakes the student makes.
+Keep responses concise (2-4 sentences).`;
+
+      const messages: AIChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        ...history.map(m => ({
+          role: m.role as 'user' | 'assistant',
+          content: m.content,
+        })),
+      ];
+
+      const response = await callAIProvider(aiConfig, messages);
+
+      // Save to localStorage
+      const sessions: ConversationSession[] = JSON.parse(
+        localStorage.getItem(`learnt_conversations_${userId}`) || '[]'
+      );
+      let activeSession = sessions.find(s => s.topic === topic);
+      if (!activeSession) {
+        activeSession = { id: `conv-${Date.now()}`, topic, messages: [], created_at: now };
+        sessions.unshift(activeSession);
+      }
+      activeSession.messages = [
+        ...history,
+        { role: 'assistant', content: response, timestamp: now }
+      ];
+      localStorage.setItem(`learnt_conversations_${userId}`, JSON.stringify(sessions));
+
+      return response;
+    } catch (err) {
+      console.warn('AI provider call failed, falling back to mock:', err);
+    }
+  }
 
   if (isMock) {
     return new Promise((resolve) => {

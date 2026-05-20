@@ -973,6 +973,10 @@ button, input, textarea, select {
   to { transform: rotate(360deg); }
 }
 
+.spin {
+  animation: spin 1s linear infinite;
+}
+
 /* Vocabulary Page Styling */
 .vocabulary-container {
   display: flex;

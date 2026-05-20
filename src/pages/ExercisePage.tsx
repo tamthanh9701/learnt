@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
+import { useAI } from '../contexts/AIContext';
 import { fetchExercisesForTopic } from '../lib/exerciseService';
 import type { ExerciseQuestion } from '../lib/exerciseService';
 import { ChevronLeft, Check, X, AlertCircle, HelpCircle, Award, RefreshCw, ArrowRight } from 'lucide-react';
@@ -9,6 +10,7 @@ import { ChevronLeft, Check, X, AlertCircle, HelpCircle, Award, RefreshCw, Arrow
 export const ExercisePage: React.FC = () => {
   const { isMock } = useAuth();
   const { locale, t } = useLanguage();
+  const { config: aiConfig } = useAI();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
 
@@ -34,7 +36,7 @@ export const ExercisePage: React.FC = () => {
     if (!topicId) return;
     try {
       setLoading(true);
-      const data = await fetchExercisesForTopic(topicId, isMock);
+      const data = await fetchExercisesForTopic(topicId, isMock, aiConfig);
       setQuestions(data);
       setCurrentIndex(0);
       setCorrectAnswersCount(0);

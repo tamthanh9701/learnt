@@ -3,6 +3,7 @@ import { HashRouter as Router, Routes, Route, Navigate } from 'react-router-dom'
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider } from './contexts/LanguageContext';
 import { ThemeProvider } from './contexts/ThemeContext';
+import { AIConfigProvider } from './contexts/AIContext';
 import { Sidebar } from './components/layout/Sidebar';
 import { LoginPage } from './pages/LoginPage';
 import { DashboardPage } from './pages/DashboardPage';
@@ -59,9 +60,11 @@ function App() {
     <ThemeProvider>
       <LanguageProvider>
         <AuthProvider>
-          <Router>
-            <AppContent />
-          </Router>
+          <AIConfigProvider>
+            <Router>
+              <AppContent />
+            </Router>
+          </AIConfigProvider>
         </AuthProvider>
       </LanguageProvider>
     </ThemeProvider>

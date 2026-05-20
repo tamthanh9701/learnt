@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { callAIProvider } from './aiClient';
+import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 
 export interface WritingFeedbackError {
   original: string;
@@ -156,12 +158,60 @@ export const submitWritingContent = async (
   userId: string,
   prompt: string,
   content: string,
-  isMock: boolean
+  isMock: boolean,
+  aiConfig?: AIConfig
 ): Promise<WritingSubmission> => {
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const now = new Date().toISOString();
 
   let aiFeedback: WritingFeedback;
+
+  // Try real AI provider first
+  if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
+    try {
+      const systemPrompt = `You are an English writing tutor. Analyze the student's essay and return a JSON object (no markdown fences) with this exact structure:
+{
+  "overall_score": <number 0-100>,
+  "strengths": [<string>, ...],
+  "errors": [{"original": "<wrong text>", "corrected": "<correct text>", "explanation": "<why>"}],
+  "suggestions": [<string>, ...],
+  "revised_text": "<improved version of the essay>"
+}
+Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coherence.`;
+
+      const messages: AIChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Topic: ${prompt}\n\nEssay:\n${content}` },
+      ];
+
+      const reply = await callAIProvider(aiConfig, messages);
+      
+      // Parse JSON from reply (handle potential markdown fences)
+      const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      aiFeedback = JSON.parse(jsonStr) as WritingFeedback;
+
+      // Save submission to localStorage
+      const submissions: WritingSubmission[] = JSON.parse(
+        localStorage.getItem(`learnt_writing_submissions_${userId}`) || '[]'
+      );
+      const newSubmission: WritingSubmission = {
+        id: `write-${Date.now()}`, prompt, content,
+        word_count: wordCount, ai_feedback: aiFeedback, created_at: now,
+      };
+      submissions.unshift(newSubmission);
+      localStorage.setItem(`learnt_writing_submissions_${userId}`, JSON.stringify(submissions));
+
+      const today = now.split('T')[0];
+      const progressKey = `learnt_progress_${userId}_${today}`;
+      const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "writing_count": 0}');
+      progress.writing_count = (progress.writing_count || 0) + 1;
+      localStorage.setItem(progressKey, JSON.stringify(progress));
+
+      return newSubmission;
+    } catch (err) {
+      console.warn('AI provider call failed for writing feedback, falling back:', err);
+    }
+  }
 
   if (isMock) {
     // Generate realistic AI feedback on client side

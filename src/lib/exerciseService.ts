@@ -1,4 +1,6 @@
 import { supabase } from './supabase';
+import { callAIProvider } from './aiClient';
+import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 
 export type ExerciseType = 'mcq' | 'cloze' | 'reorder';
 
@@ -101,8 +103,61 @@ export const seedExercises: Record<string, ExerciseQuestion[]> = {
  */
 export const fetchExercisesForTopic = async (
   topicId: string,
-  isMock: boolean
+  isMock: boolean,
+  aiConfig?: AIConfig
 ): Promise<ExerciseQuestion[]> => {
+  // Try real AI provider first
+  if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
+    try {
+      const systemPrompt = `You are an English language exercise generator. Generate exactly 3 exercises for the topic "${topicId}". Return a JSON array (no markdown fences) with this structure:
+[
+  {
+    "id": "ex-ai-1",
+    "type": "mcq",
+    "prompt_en": "<question in English>",
+    "prompt_vi": "<question in Vietnamese>",
+    "options": ["<option1>", "<option2>", "<option3>", "<option4>"],
+    "correct_option": "<correct option text>",
+    "explanation_en": "<explanation in English>",
+    "explanation_vi": "<explanation in Vietnamese>"
+  },
+  {
+    "id": "ex-ai-2",
+    "type": "cloze",
+    "prompt_en": "Fill in the blank:",
+    "prompt_vi": "Điền vào chỗ trống:",
+    "sentence_with_blank": "<sentence with [blank]>",
+    "correct_answer": "<answer>",
+    "explanation_en": "<explanation>",
+    "explanation_vi": "<explanation>"
+  },
+  {
+    "id": "ex-ai-3",
+    "type": "reorder",
+    "prompt_en": "Reorder the words:",
+    "prompt_vi": "Sắp xếp lại các từ:",
+    "scrambled_words": ["word1", "word2", ...],
+    "correct_sentence": "<correct sentence lowercase>",
+    "explanation_en": "<explanation>",
+    "explanation_vi": "<explanation>"
+  }
+]
+Make exercises relevant, educational, and at intermediate English level.`;
+
+      const messages: AIChatMessage[] = [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Generate 3 English exercises for the topic: "${topicId}"` },
+      ];
+
+      const reply = await callAIProvider(aiConfig, messages);
+      const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
+      const exercises = JSON.parse(jsonStr) as ExerciseQuestion[];
+      return exercises;
+    } catch (err) {
+      console.warn('AI provider call failed for exercise generation, falling back:', err);
+    }
+  }
+
   if (isMock) {
     // Return seed exercises if present, otherwise generate a mock set based on topicId
     if (seedExercises[topicId]) {
