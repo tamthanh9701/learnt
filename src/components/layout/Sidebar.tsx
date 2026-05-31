@@ -17,12 +17,15 @@ import {
   Menu, 
   X 
 } from 'lucide-react';
+import { displayStreak, dayKey } from '../../lib/streak';
 
 export const Sidebar: React.FC = () => {
   const { user, profile, signOut, isMock } = useAuth();
   const { locale, setLocale, t } = useLanguage();
   const { theme, toggleTheme } = useTheme();
   const [isOpen, setIsOpen] = useState(false);
+
+  const shownStreak = displayStreak(profile?.current_streak, profile?.last_activity_date, dayKey(new Date()));
 
   const toggleSidebar = () => setIsOpen(!isOpen);
 
@@ -50,7 +53,7 @@ export const Sidebar: React.FC = () => {
         <span className="brand-title">LearnT</span>
         <div className="mobile-stats">
           <Flame className="streak-icon-active" size={18} />
-          <span className="streak-count">{profile?.current_streak || 0}</span>
+            <span className="streak-count">{shownStreak}</span>
         </div>
       </header>
 
@@ -73,7 +76,7 @@ export const Sidebar: React.FC = () => {
           <div className="profile-streak-badge">
             <Flame className="streak-icon-active" />
             <div className="streak-details">
-              <span className="streak-num">{profile?.current_streak || 0}</span>
+                <span className="streak-num">{shownStreak}</span>
               <span className="streak-lbl">{t('dashboard.streak')}</span>
             </div>
           </div>
@@ -124,7 +127,7 @@ export const Sidebar: React.FC = () => {
       </aside>
 
       {/* Mobile Sidebar overlay */}
-      {isOpen && <div className="sidebar-overlay" onClick={toggleSidebar} />}
+      {isOpen && <button className="sidebar-overlay" aria-label={t('a11y.closeMenu')} onClick={toggleSidebar} />}
     </>
   );
 };

@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState } from 'react';
+import React, { createContext, useContext, useState, useEffect } from 'react';
 import en from '../i18n/en.json';
 import vi from '../i18n/vi.json';
 
@@ -14,6 +14,20 @@ const LanguageContext = createContext<LanguageContextType | undefined>(undefined
 
 const translations: Record<Locale, any> = { en, vi };
 
+// Walk a dot-notation key through a translation tree; returns the string value
+// or undefined if any segment is missing or the leaf is not a string.
+const lookup = (tree: any, parts: string[]): string | undefined => {
+  let current = tree;
+  for (const part of parts) {
+    if (current && typeof current === 'object' && part in current) {
+      current = current[part];
+    } else {
+      return undefined;
+    }
+  }
+  return typeof current === 'string' ? current : undefined;
+};
+
 export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   // Load initial locale from localStorage or browser settings
   const [locale, setLocaleState] = useState<Locale>(() => {
@@ -22,30 +36,28 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     return navigator.language.startsWith('vi') ? 'vi' : 'en';
   });
 
+  // Keep the document language in sync so assistive tech announces content
+  // with the correct language profile.
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
   const setLocale = (newLocale: Locale) => {
     setLocaleState(newLocale);
     localStorage.setItem('learnt_locale', newLocale);
   };
 
-  // Helper to translate dot-notation key (e.g. 'dashboard.streak')
+  // Translate a dot-notation key. Fallback chain: active locale -> English
+  // value -> last path segment. Never returns the raw dotted key to the UI.
   const t = (key: string, replacements?: Record<string, string | number>): string => {
     const parts = key.split('.');
-    let current = translations[locale];
-    
-    for (const part of parts) {
-      if (current && typeof current === 'object' && part in current) {
-        current = current[part];
-      } else {
-        // Return key name if translation not found
-        return key;
-      }
+
+    let value = lookup(translations[locale], parts);
+    if (value === undefined && locale !== 'en') {
+      value = lookup(translations.en, parts);
     }
 
-    if (typeof current !== 'string') {
-      return key;
-    }
-
-    let text = current;
+    let text = value ?? parts[parts.length - 1];
     if (replacements) {
       Object.entries(replacements).forEach(([k, v]) => {
         text = text.replace(`{${k}}`, String(v));

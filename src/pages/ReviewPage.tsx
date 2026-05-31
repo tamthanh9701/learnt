@@ -6,6 +6,7 @@ import { fetchCardsForSession, submitCardReview } from '../lib/vocabularyService
 import type { ReviewSessionCard } from '../lib/vocabularyService';
 import { fsrs, createEmptyCard, Rating } from 'ts-fsrs';
 import type { Grade, Card as FSRSCard } from 'ts-fsrs';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import { Volume2, ChevronLeft, Award, HelpCircle } from 'lucide-react';
 
 export const ReviewPage: React.FC = () => {
@@ -13,6 +14,7 @@ export const ReviewPage: React.FC = () => {
   const { t } = useLanguage();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const { speak } = useSpeechSynthesis();
 
   const topicId = searchParams.get('topic') || '';
   const mode = (searchParams.get('mode') as 'learn' | 'review') || 'learn';
@@ -92,19 +94,7 @@ export const ReviewPage: React.FC = () => {
   const handleSpeak = (e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
     if (!activeCard) return;
-
-    // Use Web Speech API SpeechSynthesis
-    const utterance = new SpeechSynthesisUtterance(activeCard.word);
-    utterance.lang = 'en-US';
-    
-    // Attempt to find a natural English voice
-    const voices = window.speechSynthesis.getVoices();
-    const englishVoice = voices.find(voice => voice.lang.startsWith('en') && voice.name.includes('Google'));
-    if (englishVoice) {
-      utterance.voice = englishVoice;
-    }
-    
-    window.speechSynthesis.speak(utterance);
+    speak(activeCard.word);
   };
 
   // Automatically speak when a new card is shown
@@ -148,11 +138,11 @@ export const ReviewPage: React.FC = () => {
     return (
       <div className="card no-cards-card flex flex-col align-center justify-center text-center animate-fade-in" style={{ maxWidth: '500px', margin: '40px auto' }}>
         <HelpCircle size={48} className="icon" style={{ color: 'var(--primary)', marginBottom: 'var(--spacing-md)' }} />
-        <h2 className="title-md" style={{ marginBottom: 'var(--spacing-xs)' }}>No Cards Available</h2>
+        <h2 className="title-md" style={{ marginBottom: 'var(--spacing-xs)' }}>{t('review.noCardsTitle')}</h2>
         <p className="body-sm" style={{ marginBottom: 'var(--spacing-lg)' }}>
           {mode === 'review' 
             ? t('vocabulary.allReviewed')
-            : 'You have learned all words in this topic!'
+            : t('review.allLearned')
           }
         </p>
         <button className="btn btn-primary btn-sm" onClick={() => navigate('/vocabulary')}>
@@ -169,14 +159,14 @@ export const ReviewPage: React.FC = () => {
           <Award size={40} />
         </div>
         <h2 className="title-lg" style={{ marginTop: 'var(--spacing-md)', marginBottom: 'var(--spacing-xs)' }}>
-          Session Completed!
+          {t('review.completedTitle')}
         </h2>
         <p className="body-sm" style={{ marginBottom: 'var(--spacing-lg)' }}>
-          Excellent work! You have finished this {mode} session and updated your spacing repetition memory intervals.
+          {t('review.completedDesc')}
         </p>
         <div className="completion-stats flex gap-md justify-center" style={{ marginBottom: 'var(--spacing-lg)' }}>
           <div className="stat-pill">
-            <span className="stat-label">Reviewed</span>
+            <span className="stat-label">{t('review.reviewedLabel')}</span>
             <span className="stat-val">{cards.length} {t('vocabulary.words').toLowerCase()}</span>
           </div>
         </div>
@@ -185,7 +175,7 @@ export const ReviewPage: React.FC = () => {
             {t('common.tryAgain')}
           </button>
           <button className="btn btn-secondary btn-sm flex-1 flex align-center justify-center gap-xs" onClick={() => navigate(`/writing/exercise?topic=${topicId}`)}>
-            <span>Practice Quiz</span>
+            <span>{t('review.practiceQuiz')}</span>
           </button>
           <button className="btn btn-primary btn-sm flex-1" onClick={() => navigate('/vocabulary')}>
             {t('common.back')}
@@ -209,7 +199,19 @@ export const ReviewPage: React.FC = () => {
       </div>
 
       {/* Main Flashcard Display */}
-      <div className={`flashcard ${showAnswer ? 'flipped' : ''}`} onClick={() => !showAnswer && setShowAnswer(true)}>
+      <div
+        className={`flashcard ${showAnswer ? 'flipped' : ''}`}
+        onClick={() => !showAnswer && setShowAnswer(true)}
+        role="button"
+        tabIndex={0}
+        aria-label={t('vocabulary.showAnswer')}
+        onKeyDown={(e) => {
+          if (!showAnswer && (e.key === 'Enter' || e.key === ' ')) {
+            e.preventDefault();
+            setShowAnswer(true);
+          }
+        }}
+      >
         <div className="card-face card-front flex flex-col justify-between">
           <div className="card-top-info">
             <span className="badge-pos">{activeCard.part_of_speech}</span>
@@ -217,7 +219,7 @@ export const ReviewPage: React.FC = () => {
 
           <div className="card-center-word flex flex-col align-center justify-center">
             <h1 className="flash-word">{activeCard.word}</h1>
-            <button className="speak-btn flex align-center justify-center" onClick={handleSpeak}>
+            <button className="speak-btn flex align-center justify-center" onClick={handleSpeak} aria-label={t('a11y.speakWord')}>
               <Volume2 size={24} />
             </button>
           </div>
@@ -231,7 +233,7 @@ export const ReviewPage: React.FC = () => {
           <div className="card-top-info flex justify-between align-center">
             <span className="badge-pos">{activeCard.part_of_speech}</span>
             <span className="phonetics-txt">{activeCard.phonetic}</span>
-            <button className="speak-btn-sm" onClick={handleSpeak}>
+            <button className="speak-btn-sm" onClick={handleSpeak} aria-label={t('a11y.speakWord')}>
               <Volume2 size={16} />
             </button>
           </div>
@@ -243,7 +245,7 @@ export const ReviewPage: React.FC = () => {
             </div>
 
             <div>
-              <span className="body-xs text-uppercase">Definition</span>
+              <span className="body-xs text-uppercase">{t('common.definition')}</span>
               <p className="en-definition">{activeCard.definition_en}</p>
             </div>
 

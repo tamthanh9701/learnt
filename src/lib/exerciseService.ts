@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
+import { recordActivity } from './streak';
+import { isValidExerciseList } from './llmValidation';
 
 export type ExerciseType = 'mcq' | 'cloze' | 'reorder';
 
@@ -151,8 +153,11 @@ Make exercises relevant, educational, and at intermediate English level.`;
 
       const reply = await callAIProvider(aiConfig, messages);
       const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const exercises = JSON.parse(jsonStr) as ExerciseQuestion[];
-      return exercises;
+      const exercises = JSON.parse(jsonStr);
+      if (isValidExerciseList(exercises)) {
+        return exercises;
+      }
+      console.warn('AI provider returned invalid ExerciseQuestion[] shape, falling back.');
     } catch (err) {
       console.warn('AI provider call failed for exercise generation, falling back:', err);
     }
@@ -205,7 +210,11 @@ Make exercises relevant, educational, and at intermediate English level.`;
       });
 
       if (error) throw error;
-      return data.questions;
+      if (isValidExerciseList(data?.questions)) {
+        return data.questions;
+      }
+      console.warn('Edge function returned invalid ExerciseQuestion[] shape, falling back.');
+      return fetchExercisesForTopic(topicId, true);
     } catch (err) {
       console.warn('ai-generate-exercises function not available or failed. Falling back to local generation.', err);
       return fetchExercisesForTopic(topicId, true);
@@ -228,6 +237,9 @@ export const recordExerciseCompletion = async (
     const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "exercises_completed": 0}');
     progress.exercises_completed = (progress.exercises_completed || 0) + 1;
     localStorage.setItem(progressKey, JSON.stringify(progress));
+
+    // Streak: any learning activity counts (centralized)
+    await recordActivity(userId, true, new Date(now));
   } else {
     try {
       const { data: progress, error: progErr } = await supabase
@@ -249,6 +261,9 @@ export const recordExerciseCompletion = async (
           exercises_completed: 1,
         });
       }
+
+      // Streak: any learning activity counts (centralized)
+      await recordActivity(userId, false, new Date(now));
     } catch (err) {
       console.error('Error saving exercise completion to Supabase:', err);
     }

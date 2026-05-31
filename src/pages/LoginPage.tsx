@@ -76,7 +76,7 @@ export const LoginPage: React.FC = () => {
         )}
 
         {errorMsg && (
-          <div className="error-banner">
+          <div className="error-banner" role="alert">
             {errorMsg}
           </div>
         )}
@@ -84,38 +84,44 @@ export const LoginPage: React.FC = () => {
         <form onSubmit={handleSubmit} className="login-form">
           {isSignUp && (
             <div className="form-group">
-              <label className="label">{t('auth.displayName')}</label>
+              <label htmlFor="login-display-name" className="label">{t('auth.displayName')}</label>
               <input
+                id="login-display-name"
                 type="text"
                 className="input"
                 placeholder="John Doe"
                 value={displayName}
                 onChange={e => setDisplayName(e.target.value)}
+                autoComplete="name"
                 required
               />
             </div>
           )}
 
           <div className="form-group">
-            <label className="label">{t('auth.email')}</label>
+            <label htmlFor="login-email" className="label">{t('auth.email')}</label>
             <input
+              id="login-email"
               type="email"
               className="input"
               placeholder="name@example.com"
               value={email}
               onChange={e => setEmail(e.target.value)}
+              autoComplete="username"
               required
             />
           </div>
 
           <div className="form-group">
-            <label className="label">{t('auth.password')}</label>
+            <label htmlFor="login-password" className="label">{t('auth.password')}</label>
             <input
+              id="login-password"
               type="password"
               className="input"
               placeholder="••••••••"
               value={password}
               onChange={e => setPassword(e.target.value)}
+              autoComplete={isSignUp ? 'new-password' : 'current-password'}
               required
               minLength={6}
             />

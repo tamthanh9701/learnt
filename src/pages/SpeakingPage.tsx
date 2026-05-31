@@ -119,6 +119,9 @@ export const SpeakingPage: React.FC = () => {
                 key={session.id} 
                 className="history-item flex justify-between align-center"
                 onClick={() => navigate(`/speaking/conversation?session=${session.id}`)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); navigate(`/speaking/conversation?session=${session.id}`); } }}
               >
                 <div className="flex align-center gap-md">
                   <div className="success-badge-sm flex align-center justify-center bg-primary-subtle" style={{ color: 'var(--primary)' }}>

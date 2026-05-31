@@ -2,6 +2,7 @@ import { supabase } from './supabase';
 import { callAIProvider } from './aiClient';
 import type { AIConfig } from './aiClient';
 import type { ChatMessage as AIChatMessage } from './aiClient';
+import { recordActivity } from './streak';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -171,6 +172,9 @@ Keep responses concise (2-4 sentences).`;
     const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "speaking_minutes": 0}');
     progress.speaking_minutes = (progress.speaking_minutes || 0) + 1;
     localStorage.setItem(progressKey, JSON.stringify(progress));
+
+    // Streak: any learning activity counts (centralized)
+    await recordActivity(userId, true, new Date(now));
   } else {
     // Save to Supabase speaking_sessions table
     try {
@@ -222,6 +226,9 @@ Keep responses concise (2-4 sentences).`;
           speaking_minutes: 1,
         });
       }
+
+      // Streak: any learning activity counts (centralized)
+      await recordActivity(userId, false, new Date(now));
     } catch (dbErr) {
       console.error('Error saving conversation session to Supabase:', dbErr);
     }

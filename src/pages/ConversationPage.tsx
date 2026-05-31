@@ -6,43 +6,9 @@ import { useAI } from '../contexts/AIContext';
 import { PROVIDER_LABELS } from '../lib/aiClient';
 import { fetchAIConversationResponse, fetchSpeakingSessionsHistory } from '../lib/speakingService';
 import type { ChatMessage } from '../lib/speakingService';
+import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import { Mic, MicOff, Send, Volume2, ChevronLeft, User, Sparkles, RefreshCw, AlertCircle, Bot } from 'lucide-react';
-
-// Extend window for Web Speech API types
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  onstart: (event: Event) => void;
-  onresult: (event: SpeechRecognitionEvent) => void;
-  onerror: (event: any) => void;
-  onend: () => void;
-}
 
 export const ConversationPage: React.FC = () => {
   const { user, isMock } = useAuth();
@@ -60,62 +26,21 @@ export const ConversationPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [activeSessionStarted, setActiveSessionStarted] = useState(false);
 
-  // Speech Recognition States
-  const [isListening, setIsListening] = useState(false);
-  const [recognitionSupported, setRecognitionSupported] = useState(true);
+  // Speech + error states
   const [speechError, setSpeechError] = useState<string | null>(null);
-
+  const [replyError, setReplyError] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
   const isEn = locale === 'en';
 
-  // Initialize Speech Recognition
-  useEffect(() => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setRecognitionSupported(false);
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition() as SpeechRecognitionInstance;
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US'; // English learning helper
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setSpeechError(null);
-      };
-
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        const transcript = event.results[0][0].transcript;
-        setInputText(prev => {
-          const separator = prev ? ' ' : '';
-          return prev + separator + transcript;
-        });
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event);
-        setSpeechError(event.error || 'Speech input failed');
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.error(e);
-      setRecognitionSupported(false);
-    }
-  }, []);
+  const { speak, cancel } = useSpeechSynthesis();
+  const { isListening, isSupported: recognitionSupported, toggle: toggleListening } = useSpeechRecognition({
+    lang: 'en-US',
+    onStart: () => setSpeechError(null),
+    onResult: (transcript) => setInputText(prev => (prev ? prev + ' ' + transcript : transcript)),
+    onError: (code) => setSpeechError(t(getSpeechErrorMessageKey(code))),
+  });
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -141,39 +66,6 @@ export const ConversationPage: React.FC = () => {
     loadSession();
   }, [user, sessionId, isMock]);
 
-  const toggleListening = () => {
-    if (!recognitionRef.current) return;
-
-    if (isListening) {
-      recognitionRef.current.stop();
-    } else {
-      setSpeechError(null);
-      try {
-        recognitionRef.current.start();
-      } catch (err) {
-        console.error(err);
-      }
-    }
-  };
-
-  const handleSpeakText = (text: string) => {
-    if (!('speechSynthesis' in window)) return;
-
-    // Cancel ongoing synthesis
-    window.speechSynthesis.cancel();
-
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = 'en-US';
-    
-    // Attempt to locate natural sounding Google English voice
-    const voices = window.speechSynthesis.getVoices();
-    const englishVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'));
-    if (englishVoice) {
-      utterance.voice = englishVoice;
-    }
-    window.speechSynthesis.speak(utterance);
-  };
-
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!user || !inputText.trim() || submitting) return;
@@ -181,6 +73,7 @@ export const ConversationPage: React.FC = () => {
     const userMsgContent = inputText.trim();
     setInputText('');
     setSpeechError(null);
+    setReplyError(false);
 
     const now = new Date().toISOString();
     const newMsg: ChatMessage = {
@@ -202,9 +95,29 @@ export const ConversationPage: React.FC = () => {
       ]);
 
       // Automatically speak the AI response
-      handleSpeakText(aiReply);
+      speak(aiReply);
     } catch (err) {
       console.error('Error getting AI reply:', err);
+      setReplyError(true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRetryReply = async () => {
+    if (!user || submitting || messages.length === 0) return;
+    setReplyError(false);
+    setSubmitting(true);
+    try {
+      const aiReply = await fetchAIConversationResponse(user.id, topic, messages, isMock, aiConfig);
+      setMessages(prev => [
+        ...prev,
+        { role: 'assistant', content: aiReply, timestamp: new Date().toISOString() }
+      ]);
+      speak(aiReply);
+    } catch (err) {
+      console.error('Error retrying AI reply:', err);
+      setReplyError(true);
     } finally {
       setSubmitting(false);
     }
@@ -227,8 +140,9 @@ export const ConversationPage: React.FC = () => {
     setMessages([]);
     setInputText('');
     setActiveSessionStarted(false);
+    setReplyError(false);
     // Cancel voices
-    window.speechSynthesis.cancel();
+    cancel();
   };
 
   return (
@@ -324,9 +238,9 @@ export const ConversationPage: React.FC = () => {
                     {isAssistant && (
                       <button 
                         className="voice-speak-btn flex align-center justify-center" 
-                        onClick={() => handleSpeakText(msg.content)}
+                        onClick={() => speak(msg.content)}
                         style={{ marginTop: '6px' }}
-                        title="Speak response"
+                        aria-label={t('a11y.speakWord')}
                       >
                         <Volume2 size={14} />
                       </button>
@@ -361,9 +275,20 @@ export const ConversationPage: React.FC = () => {
           {/* Input control block */}
           <div className="chat-input-controls flex flex-col gap-sm">
             {speechError && (
-              <div className="error-banner-sm flex align-center gap-xs">
+              <div className="error-banner-sm flex align-center gap-xs" role="alert">
                 <AlertCircle size={14} />
-                <span className="body-xs">Speech Input Error: {speechError}</span>
+                <span className="body-xs">{speechError}</span>
+              </div>
+            )}
+            {replyError && (
+              <div className="error-banner-sm flex align-center justify-between gap-xs" role="alert">
+                <span className="flex align-center gap-xs">
+                  <AlertCircle size={14} />
+                  <span className="body-xs">{t('errors.conversationFailed')}</span>
+                </span>
+                <button type="button" className="btn btn-outline btn-xs" onClick={handleRetryReply} disabled={submitting}>
+                  {t('common.tryAgain')}
+                </button>
               </div>
             )}
             
@@ -373,7 +298,8 @@ export const ConversationPage: React.FC = () => {
                   type="button"
                   onClick={toggleListening}
                   className={`btn btn-outline flex align-center justify-center ${isListening ? 'listening' : ''}`}
-                  title={isListening ? 'Stop listening' : 'Start speaking input'}
+                  aria-pressed={isListening}
+                  aria-label={isListening ? t('a11y.micStop') : t('a11y.micStart')}
                 >
                   {isListening ? <MicOff size={18} /> : <Mic size={18} />}
                 </button>
@@ -381,7 +307,7 @@ export const ConversationPage: React.FC = () => {
                 <button
                   type="button"
                   className="btn btn-outline flex align-center justify-center disabled"
-                  title="Voice input not supported by browser"
+                  aria-label={t('speech.unsupported')}
                   disabled
                 >
                   <MicOff size={18} style={{ opacity: 0.5 }} />
@@ -405,14 +331,15 @@ export const ConversationPage: React.FC = () => {
                 className="btn btn-primary btn-sm flex align-center justify-center"
                 style={{ padding: '12px' }}
                 disabled={submitting || !inputText.trim()}
+                aria-label={t('a11y.sendMessage')}
               >
                 <Send size={16} />
               </button>
             </form>
 
-            <span className="body-xs text-center" style={{ color: 'var(--text-tertiary)' }}>
+            <span className="body-xs text-center" style={{ color: 'var(--text-tertiary)' }} aria-live="polite">
               {isListening 
-                ? (isEn ? 'Voice active. Click microphone card again to stop recording.' : 'Micro đang mở. Click để dừng ghi âm.')
+                ? t('speaking.listening')
                 : (isEn ? 'You can speak using the microphone button or type using your keyboard.' : 'Bạn có thể nói bằng micro hoặc nhập từ bàn phím.')
               }
             </span>

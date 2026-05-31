@@ -11,7 +11,9 @@
     "vietnamese": "Tiếng Việt",
     "english": "Tiếng Anh",
     "yes": "Có",
-    "no": "Không"
+    "no": "Không",
+    "definition": "Định nghĩa",
+    "loadingApp": "Đang tải LearnT..."
   },
   "auth": {
     "title": "Chào mừng đến với LearnT",
@@ -25,7 +27,13 @@
     "alreadyHaveAccount": "Đã có tài khoản? Đăng Nhập",
     "signingIn": "Đang đăng nhập...",
     "signingUp": "Đang đăng ký...",
-    "signOut": "Đăng Xuất"
+    "signOut": "Đăng Xuất",
+    "displayNameRequired": "Vui lòng nhập tên hiển thị",
+    "errorSignUp": "Đăng ký không thành công. Vui lòng thử lại.",
+    "errorSignIn": "Email hoặc mật khẩu không đúng",
+    "errorUnexpected": "Đã xảy ra lỗi không mong muốn",
+    "demoTitle": "Chế độ dùng thử",
+    "demoBody": "Đăng nhập hoặc đăng ký bằng bất kỳ email và mật khẩu nào. Không cần xác minh. Dữ liệu được lưu trên thiết bị của bạn."
   },
   "nav": {
     "dashboard": "Tổng quan",
@@ -43,6 +51,13 @@
     "goalStatus": "Đã ôn {reviewed}/{total} từ hôm nay",
     "quickReview": "Ôn tập các từ đến hạn",
     "noDueCards": "Không có từ nào cần ôn hôm nay!",
+    "greeting": "Chào {name}!",
+    "loadingStats": "Đang tải thống kê...",
+    "dueAlertDesc": "Bạn có thẻ đang chờ được ôn tập",
+    "reviewNow": "Ôn tập ngay",
+    "noDueDesc": "Hãy quay lại sau hoặc học thêm từ mới nhé!",
+    "startPracticing": "Bắt đầu luyện tập",
+    "statsError": "Không thể tải thống kê của bạn. Vui lòng thử lại.",
     "modules": {
       "vocabTitle": "Học Từ Vựng",
       "vocabDesc": "Học từ mới và ôn tập với phương pháp lặp lại ngắt quãng (FSRS)",
@@ -83,7 +98,12 @@
     "feedback": "Nhận xét từ giáo viên AI",
     "readThis": "Đọc to câu sau đây:",
     "accuracy": "Điểm phát âm",
-    "speakNow": "Nhấn và nói..."
+    "speakNow": "Nhấn và nói...",
+    "noChallengesTitle": "Chưa có thử thách",
+    "noChallengesDesc": "Danh sách thử thách phát âm đang trống.",
+    "transcribedSpeech": "Nội dung đã chuyển thành văn bản",
+    "wordCorrect": "Phát âm đúng",
+    "wordIncorrect": "Từ sai hoặc bị bỏ sót"
   },
   "writing": {
     "title": "Phòng luyện viết",
@@ -116,5 +136,36 @@
     "uiLanguage": "Ngôn ngữ giao diện",
     "dailyGoal": "Mục tiêu hàng ngày (từ/ngày)",
     "dangerZone": "Vùng nguy hiểm"
+  },
+  "review": {
+    "noCardsTitle": "Không có thẻ nào",
+    "allLearned": "Bạn đã học hết tất cả từ trong chủ đề này!",
+    "completedTitle": "Hoàn thành phiên ôn tập!",
+    "completedDesc": "Làm tốt lắm! Lịch ôn tập của bạn đã được cập nhật.",
+    "reviewedLabel": "Đã ôn tập",
+    "practiceQuiz": "Luyện tập trắc nghiệm"
+  },
+  "speech": {
+    "inputError": "Lỗi nhập bằng giọng nói",
+    "micDenied": "Quyền truy cập micrô đã bị chặn. Hãy cho phép trong cài đặt trình duyệt của bạn.",
+    "unsupported": "Trình duyệt này không hỗ trợ nhập bằng giọng nói. Hãy thử Google Chrome.",
+    "noSpeech": "Chúng tôi chưa nghe rõ. Vui lòng thử lại."
+  },
+  "errors": {
+    "boundaryTitle": "Đã xảy ra sự cố",
+    "boundaryMessage": "Ứng dụng gặp sự cố không mong muốn. Tải lại thường sẽ khắc phục được.",
+    "reload": "Tải lại",
+    "conversationFailed": "Không nhận được phản hồi. Vui lòng thử lại.",
+    "writingFailed": "Không thể phân tích bài viết của bạn. Vui lòng thử lại.",
+    "exerciseFailed": "Không thể tải bài tập. Vui lòng thử lại."
+  },
+  "a11y": {
+    "speakWord": "Nghe phát âm",
+    "sendMessage": "Gửi tin nhắn",
+    "micStart": "Bắt đầu nhập bằng giọng nói",
+    "micStop": "Dừng nhập bằng giọng nói",
+    "skipToMain": "Chuyển đến nội dung chính",
+    "closeMenu": "Đóng menu",
+    "toggleTheme": "Chuyển đổi giao diện"
   }
 }

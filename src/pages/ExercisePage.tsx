@@ -18,6 +18,7 @@ export const ExercisePage: React.FC = () => {
 
   const [questions, setQuestions] = useState<ExerciseQuestion[]>([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
 
   // Interaction State
@@ -36,6 +37,7 @@ export const ExercisePage: React.FC = () => {
     if (!topicId) return;
     try {
       setLoading(true);
+      setLoadError(false);
       const data = await fetchExercisesForTopic(topicId, isMock, aiConfig);
       setQuestions(data);
       setCurrentIndex(0);
@@ -44,6 +46,7 @@ export const ExercisePage: React.FC = () => {
       resetInteraction();
     } catch (err) {
       console.error('Error fetching exercises:', err);
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
@@ -127,13 +130,28 @@ export const ExercisePage: React.FC = () => {
     );
   }
 
+  if (loadError) {
+    return (
+      <div className="card no-cards-card flex flex-col align-center justify-center text-center animate-fade-in" style={{ maxWidth: '500px', margin: '40px auto' }} role="alert">
+        <AlertCircle size={48} className="icon" style={{ color: 'var(--warning)', marginBottom: 'var(--spacing-md)' }} />
+        <h2 className="title-md" style={{ marginBottom: 'var(--spacing-xs)' }}>{t('common.error')}</h2>
+        <p className="body-sm" style={{ marginBottom: 'var(--spacing-lg)' }}>
+          {t('errors.exerciseFailed')}
+        </p>
+        <button className="btn btn-primary btn-sm" onClick={loadExercises}>
+          {t('common.tryAgain')}
+        </button>
+      </div>
+    );
+  }
+
   if (questions.length === 0) {
     return (
       <div className="card no-cards-card flex flex-col align-center justify-center text-center animate-fade-in" style={{ maxWidth: '500px', margin: '40px auto' }}>
         <HelpCircle size={48} className="icon" style={{ color: 'var(--primary)', marginBottom: 'var(--spacing-md)' }} />
-        <h2 className="title-md" style={{ marginBottom: 'var(--spacing-xs)' }}>No Exercises Available</h2>
+        <h2 className="title-md" style={{ marginBottom: 'var(--spacing-xs)' }}>{t('speaking.noChallengesTitle')}</h2>
         <p className="body-sm" style={{ marginBottom: 'var(--spacing-lg)' }}>
-          There are no exercises generated for this topic yet.
+          {t('speaking.noChallengesDesc')}
         </p>
         <button className="btn btn-primary btn-sm" onClick={() => navigate('/vocabulary')}>
           {t('common.back')}

@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
+import { recordActivity } from './streak';
+import { isValidWritingFeedback } from './llmValidation';
 
 export interface WritingFeedbackError {
   original: string;
@@ -72,7 +74,7 @@ export const seedWritingPrompts: WritingPrompt[] = [
 /**
  * Basic client-side grammar & styling heuristics for instant fallback feedback
  */
-const analyzeGrammarMock = (content: string): WritingFeedback => {
+export const analyzeGrammarMock = (content: string): WritingFeedback => {
   const errors: WritingFeedbackError[] = [];
   const strengths: string[] = [];
   const suggestions: string[] = [];
@@ -186,11 +188,16 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
       ];
 
       const reply = await callAIProvider(aiConfig, messages);
-      
+
       // Parse JSON from reply (handle potential markdown fences)
       const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      aiFeedback = JSON.parse(jsonStr) as WritingFeedback;
-      feedbackGenerated = true;
+      const parsed = JSON.parse(jsonStr);
+      if (isValidWritingFeedback(parsed)) {
+        aiFeedback = parsed;
+        feedbackGenerated = true;
+      } else {
+        console.warn('AI provider returned invalid WritingFeedback shape, falling back.');
+      }
     } catch (err) {
       console.warn('AI provider call failed for writing feedback, falling back:', err);
     }
@@ -203,8 +210,12 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
         body: { prompt, content },
       });
       if (funcError) throw funcError;
-      aiFeedback = data.feedback;
-      feedbackGenerated = true;
+      if (isValidWritingFeedback(data?.feedback)) {
+        aiFeedback = data.feedback;
+        feedbackGenerated = true;
+      } else {
+        console.warn('Edge function returned invalid WritingFeedback shape, falling back.');
+      }
     } catch (err) {
       console.warn('Supabase Edge Function failed or not deployed, falling back:', err);
     }
@@ -238,6 +249,9 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
     const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0, "writing_count": 0}');
     progress.writing_count = (progress.writing_count || 0) + 1;
     localStorage.setItem(progressKey, JSON.stringify(progress));
+
+    // Streak: any learning activity counts (centralized)
+    await recordActivity(userId, true, new Date(now));
 
     return newSubmission;
   } else {
@@ -278,6 +292,9 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
           writing_count: 1,
         });
       }
+
+      // Streak: any learning activity counts (centralized)
+      await recordActivity(userId, false, new Date(now));
 
       return {
         id: dbData.id,

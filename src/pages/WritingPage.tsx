@@ -19,6 +19,7 @@ export const WritingPage: React.FC = () => {
   const [selectedPrompt, setSelectedPrompt] = useState<WritingPrompt>(seedWritingPrompts[0]);
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState(false);
   
   // Results & History
   const [currentFeedback, setCurrentFeedback] = useState<WritingSubmission | null>(null);
@@ -52,6 +53,7 @@ export const WritingPage: React.FC = () => {
 
     try {
       setSubmitting(true);
+      setSubmitError(false);
       const promptTitle = locale === 'en' ? selectedPrompt.title_en : selectedPrompt.title_vi;
       const submission = await submitWritingContent(user.id, promptTitle, content, isMock, aiConfig);
       setCurrentFeedback(submission);
@@ -60,6 +62,7 @@ export const WritingPage: React.FC = () => {
       setHistory(prev => [submission, ...prev]);
     } catch (err) {
       console.error('Error submitting essay:', err);
+      setSubmitError(true);
     } finally {
       setSubmitting(false);
     }
@@ -189,6 +192,17 @@ export const WritingPage: React.FC = () => {
                 </button>
               </div>
             </form>
+            {submitError && (
+              <div className="error-banner-sm flex align-center justify-between gap-xs" role="alert" style={{ marginTop: 'var(--spacing-sm)' }}>
+                <span className="flex align-center gap-xs">
+                  <AlertCircle size={14} />
+                  <span className="body-xs">{t('errors.writingFailed')}</span>
+                </span>
+                <button type="button" className="btn btn-outline btn-xs" onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent)} disabled={submitting}>
+                  {t('common.tryAgain')}
+                </button>
+              </div>
+            )}
           </div>
         </div>
 
@@ -304,6 +318,9 @@ export const WritingPage: React.FC = () => {
                       key={item.id} 
                       className="history-item flex justify-between align-center"
                       onClick={() => handleSelectHistoryItem(item)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSelectHistoryItem(item); } }}
                     >
                       <div className="flex flex-col" style={{ overflow: 'hidden', paddingRight: '8px' }}>
                         <span className="body-xs font-semibold text-truncate" style={{ color: 'var(--text-primary)' }}>

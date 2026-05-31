@@ -4,7 +4,7 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { PROVIDER_MODELS, PROVIDER_LABELS } from '../lib/aiClient';
 import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
-import { Settings, User, Database, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi } from 'lucide-react';
+import { Settings, User, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi } from 'lucide-react';
 
 const AI_PROVIDERS: { value: AIProviderType; label: string }[] = [
   { value: 'none', label: PROVIDER_LABELS.none },
@@ -22,10 +22,6 @@ export const SettingsPage: React.FC = () => {
   const [displayName, setDisplayName] = useState(profile?.display_name || user?.email?.split('@')[0] || '');
   const [updating, setUpdating] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
-
-  // FSRS customisable parameters
-  const [retention, setRetention] = useState('0.90');
-  const [maxInterval, setMaxInterval] = useState('36500');
 
   // AI Config local state
   const [aiProvider, setAiProvider] = useState<AIProviderType>(savedConfig.provider);
@@ -166,10 +162,11 @@ export const SettingsPage: React.FC = () => {
 
           <form onSubmit={handleUpdateProfile} className="flex flex-col gap-md">
             <div className="input-group">
-              <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+              <label htmlFor="settings-display-name" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                 {isEn ? 'Display Name' : 'Tên hiển thị'}
               </label>
               <input
+                id="settings-display-name"
                 type="text"
                 className="input"
                 value={displayName}
@@ -180,10 +177,11 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             <div className="input-group">
-              <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+              <label htmlFor="settings-email" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                 {isEn ? 'Email Address' : 'Địa chỉ Email'}
               </label>
               <input
+                id="settings-email"
                 type="email"
                 className="input"
                 value={user?.email || ''}
@@ -193,7 +191,7 @@ export const SettingsPage: React.FC = () => {
             </div>
 
             {successMsg && (
-              <div className="success-banner flex align-center gap-xs">
+              <div className="success-banner flex align-center gap-xs" role="status">
                 <Check size={16} />
                 <span className="body-xs font-medium">{successMsg}</span>
               </div>
@@ -237,10 +235,11 @@ export const SettingsPage: React.FC = () => {
           <div className="flex flex-col gap-md">
             {/* Provider Selector */}
             <div className="input-group">
-              <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+              <label htmlFor="settings-ai-provider" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                 {isEn ? 'AI Provider' : 'Nhà cung cấp AI'}
               </label>
               <select
+                id="settings-ai-provider"
                 className="input"
                 value={aiProvider}
                 onChange={(e) => setAiProvider(e.target.value as AIProviderType)}
@@ -254,11 +253,12 @@ export const SettingsPage: React.FC = () => {
             {/* API Key */}
             {needsApiKey && (
               <div className="input-group">
-                <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                <label htmlFor="settings-api-key" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                   API Key
                 </label>
                 <div className="flex gap-xs" style={{ position: 'relative' }}>
                   <input
+                    id="settings-api-key"
                     type={showApiKey ? 'text' : 'password'}
                     className="input flex-1"
                     value={aiApiKey}
@@ -276,10 +276,15 @@ export const SettingsPage: React.FC = () => {
                     {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
                 </div>
-                <span className="body-xs text-tertiary" style={{ marginTop: '4px', display: 'block' }}>
-                  {isEn 
-                    ? 'Your API key is stored securely and never shared. It is sent directly from your browser to the AI provider.'
-                    : 'API key được lưu trữ an toàn và không bao giờ bị chia sẻ. Nó được gửi trực tiếp từ trình duyệt của bạn đến nhà cung cấp AI.'}
+                <span className="body-xs text-secondary" style={{ marginTop: '4px', display: 'block' }}>
+                  {/* SECURITY NOTE (Tier C, DEFERRED): API keys are stored unencrypted -
+                      browser localStorage and, in cloud mode, the Supabase ai_config row -
+                      and travel directly from the browser to the provider. Full remediation
+                      (server-side proxy + encryption at rest) is out of scope for Tier A;
+                      tracked for Tier C. See non-scope.md. Compliance sign-off: BA + DevOps. */}
+                  {isEn
+                    ? "Your API key is stored in this browser's local storage and is sent directly from your browser to the AI provider with each request. It is not encrypted, so avoid using a shared or public device."
+                    : 'Khóa API của bạn được lưu trong bộ nhớ cục bộ của trình duyệt này và được gửi trực tiếp từ trình duyệt đến nhà cung cấp AI trong mỗi yêu cầu. Khóa không được mã hóa, vì vậy hãy tránh dùng trên thiết bị chung hoặc công cộng.'}
                 </span>
               </div>
             )}
@@ -287,10 +292,11 @@ export const SettingsPage: React.FC = () => {
             {/* Ollama Base URL */}
             {needsOllamaUrl && (
               <div className="input-group">
-                <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                <label htmlFor="settings-ollama-url" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                   Ollama Base URL
                 </label>
                 <input
+                  id="settings-ollama-url"
                   type="text"
                   className="input"
                   value={aiOllamaUrl}
@@ -308,10 +314,11 @@ export const SettingsPage: React.FC = () => {
             {/* Model Selector */}
             {aiProvider !== 'none' && (
               <div className="input-group">
-                <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
+                <label htmlFor="settings-ai-model" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                   {isEn ? 'Model' : 'Mô hình AI'}
                 </label>
                 <select
+                  id="settings-ai-model"
                   className="input"
                   value={aiModel}
                   onChange={(e) => setAiModel(e.target.value)}
@@ -385,61 +392,6 @@ export const SettingsPage: React.FC = () => {
                 </button>
               </div>
             )}
-          </div>
-        </div>
-
-        {/* Section 3: FSRS Custom Options */}
-        <div className="card settings-card">
-          <h2 className="title-xs flex align-center gap-xs" style={{ marginBottom: 'var(--spacing-sm)' }}>
-            <Database size={16} className="text-secondary" />
-            <span>FSRS Scheduling Parameters</span>
-          </h2>
-          <p className="body-xs text-secondary" style={{ marginBottom: 'var(--spacing-md)' }}>
-            Configure default settings for the Free Spaced Repetition Scheduler algorithm.
-          </p>
-
-          <div className="grid grid-cols-2 gap-md" style={{ marginBottom: 'var(--spacing-md)' }}>
-            <div className="input-group">
-              <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
-                Request Retention
-              </label>
-              <input
-                type="number"
-                step="0.01"
-                min="0.70"
-                max="0.98"
-                className="input"
-                value={retention}
-                onChange={(e) => setRetention(e.target.value)}
-              />
-              <span className="body-xs text-tertiary" style={{ marginTop: '2px', display: 'block' }}>
-                Target recall probability (default 0.90).
-              </span>
-            </div>
-
-            <div className="input-group">
-              <label className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
-                Maximum Interval (days)
-              </label>
-              <input
-                type="number"
-                className="input"
-                value={maxInterval}
-                onChange={(e) => setMaxInterval(e.target.value)}
-              />
-              <span className="body-xs text-tertiary" style={{ marginTop: '2px', display: 'block' }}>
-                Cap card review spacing (default 36500).
-              </span>
-            </div>
-          </div>
-
-          <div className="flex justify-end">
-            <button 
-              className="btn btn-secondary btn-xs"
-              onClick={() => alert(isEn ? 'FSRS parameters updated!' : 'Đã cập nhật các tham số FSRS!')}
-            >
-              Update Scheduler Settings
-            </button>
           </div>
         </div>
 

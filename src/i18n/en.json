@@ -11,7 +11,9 @@
     "vietnamese": "Vietnamese",
     "english": "English",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "definition": "Definition",
+    "loadingApp": "Loading LearnT..."
   },
   "auth": {
     "title": "Welcome to LearnT",
@@ -25,7 +27,13 @@
     "alreadyHaveAccount": "Already have an account? Sign In",
     "signingIn": "Signing in...",
     "signingUp": "Signing up...",
-    "signOut": "Sign Out"
+    "signOut": "Sign Out",
+    "displayNameRequired": "Display name is required",
+    "errorSignUp": "Couldn't sign up. Please try again.",
+    "errorSignIn": "Invalid email or password",
+    "errorUnexpected": "An unexpected error occurred",
+    "demoTitle": "Demo Mode",
+    "demoBody": "Sign in or sign up with any email and password. No verification required. Data is saved locally."
   },
   "nav": {
     "dashboard": "Dashboard",
@@ -43,6 +51,13 @@
     "goalStatus": "{reviewed}/{total} cards reviewed today",
     "quickReview": "Review Due Cards",
     "noDueCards": "No due cards for today!",
+    "greeting": "Hi, {name}!",
+    "loadingStats": "Loading stats...",
+    "dueAlertDesc": "You have cards waiting to be reviewed",
+    "reviewNow": "Review Now",
+    "noDueDesc": "Check back later or learn some new words!",
+    "startPracticing": "Start Practicing",
+    "statsError": "Couldn't load your stats. Please try again.",
     "modules": {
       "vocabTitle": "Vocabulary Practice",
       "vocabDesc": "Learn new words and review using Spaced Repetition (FSRS)",
@@ -83,7 +98,12 @@
     "feedback": "AI Coach Corrections",
     "readThis": "Read this sentence aloud:",
     "accuracy": "Accuracy Score",
-    "speakNow": "Press and speak..."
+    "speakNow": "Press and speak...",
+    "noChallengesTitle": "No Challenges",
+    "noChallengesDesc": "Pronunciation challenges list is empty.",
+    "transcribedSpeech": "Transcribed Speech",
+    "wordCorrect": "Correctly spoken",
+    "wordIncorrect": "Incorrect or omitted word"
   },
   "writing": {
     "title": "Writing Studio",
@@ -116,5 +136,36 @@
     "uiLanguage": "App Language",
     "dailyGoal": "Daily Goal (cards/day)",
     "dangerZone": "Danger Zone"
+  },
+  "review": {
+    "noCardsTitle": "No Cards Available",
+    "allLearned": "You have learned all words in this topic!",
+    "completedTitle": "Session Completed!",
+    "completedDesc": "Excellent work! Your review intervals are updated.",
+    "reviewedLabel": "Reviewed",
+    "practiceQuiz": "Practice Quiz"
+  },
+  "speech": {
+    "inputError": "Speech input error",
+    "micDenied": "Microphone access was blocked. Allow it in your browser settings.",
+    "unsupported": "Voice input isn't supported in this browser. Try Google Chrome.",
+    "noSpeech": "We didn't catch that. Please try again."
+  },
+  "errors": {
+    "boundaryTitle": "Something went wrong",
+    "boundaryMessage": "The app hit an unexpected problem. Reloading usually fixes it.",
+    "reload": "Reload",
+    "conversationFailed": "Couldn't get a reply. Please try again.",
+    "writingFailed": "Couldn't analyze your writing. Please try again.",
+    "exerciseFailed": "Couldn't load exercises. Please try again."
+  },
+  "a11y": {
+    "speakWord": "Listen to pronunciation",
+    "sendMessage": "Send message",
+    "micStart": "Start voice input",
+    "micStop": "Stop voice input",
+    "skipToMain": "Skip to main content",
+    "closeMenu": "Close menu",
+    "toggleTheme": "Toggle theme"
   }
 }

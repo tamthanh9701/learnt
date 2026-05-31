@@ -9,6 +9,7 @@ export interface UserProfile {
   daily_goal: number;
   current_streak: number;
   longest_streak: number;
+  last_activity_date?: string;
 }
 
 interface AuthContextType {

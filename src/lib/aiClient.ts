@@ -40,11 +40,14 @@ async function callGemini(config: AIConfig, messages: ChatMessage[]): Promise<st
   }
   body.generationConfig = { temperature: 0.7, maxOutputTokens: 2048 };
 
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent?key=${config.apiKey}`;
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`;
 
   const res = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      'x-goog-api-key': config.apiKey,
+    },
     body: JSON.stringify(body),
   });
 

@@ -3,6 +3,8 @@ import { seedTopics, seedFlashcards } from '../data/seedVocabulary';
 import type { SeedTopic, SeedFlashcard } from '../data/seedVocabulary';
 import { fsrs, createEmptyCard, Rating } from 'ts-fsrs';
 import type { Card as FSRSCard, Grade } from 'ts-fsrs';
+import { recordActivity } from './streak';
+import { cardToRecord } from './learnerCard';
 
 
 export interface TopicProgress {
@@ -323,7 +325,7 @@ export const fetchCardsForSession = async (
 export const submitCardReview = async (
   userId: string,
   cardId: string,
-  topicId: string,
+  _topicId: string,
   rating: Rating, // 1: Again, 2: Hard, 3: Good, 4: Easy
   isMock: boolean
 ): Promise<FSRSCard> => {
@@ -391,17 +393,10 @@ export const submitCardReview = async (
     const learnerCards: any[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
     const index = learnerCards.findIndex(l => l.card_id === cardId);
 
+    const existing = index >= 0 ? learnerCards[index] : undefined;
     const savedRecord = {
-      card_id: cardId,
-      topic_id: topicId,
-      due: nextCardState.due.toISOString(),
-      stability: nextCardState.stability,
-      difficulty: nextCardState.difficulty,
-      elapsed_days: nextCardState.elapsed_days,
-      scheduled_days: nextCardState.scheduled_days,
-      reps: nextCardState.reps,
-      state: nextCardState.state,
-      last_review: nextCardState.last_review?.toISOString(),
+      ...cardToRecord(nextCardState, { learnerId: userId, cardId }),
+      created_at: existing?.created_at ?? now.toISOString(),
     };
 
     if (index >= 0) {
@@ -418,38 +413,11 @@ export const submitCardReview = async (
     progress.cards_reviewed += 1;
     localStorage.setItem(progressKey, JSON.stringify(progress));
 
-    // Update streak if this is the first review of the day
-    const profileKey = `learnt_profile_${userId}`;
-    const profile = JSON.parse(localStorage.getItem(profileKey) || '{}');
-    const lastActivity = localStorage.getItem(`learnt_last_activity_${userId}`);
-
-    if (lastActivity !== today) {
-      // If active yesterday, increment streak. Otherwise reset or set to 1.
-      const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      if (lastActivity === yesterday) {
-        profile.current_streak = (profile.current_streak || 0) + 1;
-      } else if (lastActivity !== today) {
-        profile.current_streak = 1;
-      }
-      profile.longest_streak = Math.max(profile.longest_streak || 0, profile.current_streak);
-      localStorage.setItem(profileKey, JSON.stringify(profile));
-      localStorage.setItem(`learnt_last_activity_${userId}`, today);
-    }
+    // Streak handled centrally (any-activity, reset-on-gap)
+    await recordActivity(userId, true, now);
   } else {
     // Supabase saving
-    const savedRecord = {
-      learner_id: userId,
-      card_id: cardId,
-      due: nextCardState.due.toISOString(),
-      stability: nextCardState.stability,
-      difficulty: nextCardState.difficulty,
-      elapsed_days: nextCardState.elapsed_days,
-      scheduled_days: nextCardState.scheduled_days,
-      reps: nextCardState.reps,
-      lapses: nextCardState.lapses,
-      state: nextCardState.state,
-      last_review: nextCardState.last_review?.toISOString(),
-    };
+    const savedRecord = cardToRecord(nextCardState, { learnerId: userId, cardId });
 
     // Upsert card status
     const { data: lcRow, error: upsertErr } = await supabase
@@ -496,42 +464,16 @@ export const submitCardReview = async (
         cards_reviewed: 1,
       });
 
-      // Update user streak (normally calculated backend, we can trigger profile updates safely here)
-      const { data: profile, error: profErr } = await supabase
-        .from('profiles')
-        .select('current_streak, longest_streak')
-        .eq('id', userId)
-        .single();
-      
-      if (!profErr && profile) {
-        const yesterday = new Date(now.getTime() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        // Fetch yesterday progress
-        const { data: yesProg } = await supabase
-          .from('daily_progress')
-          .select('id')
-          .eq('learner_id', userId)
-          .eq('activity_date', yesterday)
-          .single();
-
-        let newStreak = 1;
-        if (yesProg) {
-          newStreak = profile.current_streak + 1;
-        }
-
-        await supabase
-          .from('profiles')
-          .update({
-            current_streak: newStreak,
-            longest_streak: Math.max(profile.longest_streak, newStreak),
-          })
-          .eq('id', userId);
-      }
+      // streak handled centrally below (decoupled from daily_progress)
     } else if (progress) {
       await supabase
         .from('daily_progress')
         .update({ cards_reviewed: progress.cards_reviewed + 1 })
         .eq('id', progress.id);
     }
+
+    // Streak handled centrally (any-activity, reset-on-gap), decoupled from daily_progress
+    await recordActivity(userId, false, now);
   }
 
   return nextCardState;

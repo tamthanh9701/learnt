@@ -1083,7 +1083,7 @@ button, input, textarea, select {
 
 /* Flashcard Flipping Concept */
 .flashcard {
-  height: 380px;
+  min-height: 380px;
   perspective: 1000px;
   cursor: pointer;
   position: relative;
@@ -1389,6 +1389,80 @@ button, input, textarea, select {
 .voice-speak-btn:hover {
   background: var(--bg-surface-hover);
   color: var(--primary);
+}
+
+/* ===== Tier B accessibility + responsive additions ===== */
+
+/* A1.8 Respect reduced-motion preference */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* A1.9 Global visible focus ring for keyboard users */
+:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+.main-content-layout:focus {
+  outline: none;
+}
+
+/* S1.6 Skip link (focus-moving button; HashRouter-safe) */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 1000;
+  padding: 8px 16px;
+  background: var(--primary);
+  color: var(--accent-text);
+  border: none;
+  border-radius: 0 0 8px 0;
+  cursor: pointer;
+}
+.skip-link:focus {
+  left: 0;
+}
+
+/* S1.3 Mobile viewport-height fallback (dvh with vh fallback) */
+body,
+#root,
+.app-layout,
+.login-page-container {
+  min-height: 100dvh;
+}
+
+/* S1.1 Prevent iOS auto-zoom: form controls >= 16px on mobile */
+@media (max-width: 768px) {
+  .input, input, textarea, select {
+    font-size: 16px;
+  }
+}
+
+/* A1.7 Non-color cue for incorrect pronunciation words */
+.pron-word-badge.incorrect {
+  text-decoration: underline;
+  text-decoration-style: wavy;
+}
+
+/* S1.4 Fallback for browsers without backdrop-filter (legible surfaces) */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  .card-glass, .assistant-bubble, .input, .app-sidebar, .mobile-header {
+    background: #ffffff;
+  }
+  :root[data-theme="dark"] .card-glass,
+  :root[data-theme="dark"] .assistant-bubble,
+  :root[data-theme="dark"] .input,
+  :root[data-theme="dark"] .app-sidebar,
+  :root[data-theme="dark"] .mobile-header {
+    background: #1a1a1f;
+  }
 }
 
 

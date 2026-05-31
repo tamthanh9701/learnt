@@ -1,44 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { seedPronunciationChallenges, scorePronunciationSimilarity } from '../lib/speakingService';
 import type { PronunciationChallenge } from '../lib/speakingService';
-import { ChevronLeft, Volume2, Mic, MicOff, AlertCircle, Sparkles, CheckCircle, HelpCircle } from 'lucide-react';
-
-interface SpeechRecognitionEvent extends Event {
-  resultIndex: number;
-  results: SpeechRecognitionResultList;
-}
-
-interface SpeechRecognitionResultList {
-  length: number;
-  item(index: number): SpeechRecognitionResult;
-  [index: number]: SpeechRecognitionResult;
-}
-
-interface SpeechRecognitionResult {
-  isFinal: boolean;
-  length: number;
-  item(index: number): SpeechRecognitionAlternative;
-  [index: number]: SpeechRecognitionAlternative;
-}
-
-interface SpeechRecognitionAlternative {
-  transcript: string;
-  confidence: number;
-}
-
-interface SpeechRecognitionInstance extends EventTarget {
-  continuous: boolean;
-  interimResults: boolean;
-  lang: string;
-  start(): void;
-  stop(): void;
-  onstart: (event: Event) => void;
-  onresult: (event: SpeechRecognitionEvent) => void;
-  onerror: (event: any) => void;
-  onend: () => void;
-}
+import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
+import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
+import { ChevronLeft, Volume2, Mic, MicOff, AlertCircle, Sparkles, CheckCircle, X, HelpCircle } from 'lucide-react';
 
 export const PronunciationPage: React.FC = () => {
   const { locale, t } = useLanguage();
@@ -47,9 +14,6 @@ export const PronunciationPage: React.FC = () => {
   const [challenges] = useState<PronunciationChallenge[]>(seedPronunciationChallenges);
   const [currentIndex, setCurrentIndex] = useState(0);
 
-  // Recognition states
-  const [isListening, setIsListening] = useState(false);
-  const [recognitionSupported, setRecognitionSupported] = useState(true);
   const [speechError, setSpeechError] = useState<string | null>(null);
 
   // Result States
@@ -59,115 +23,49 @@ export const PronunciationPage: React.FC = () => {
     words: { word: string; isCorrect: boolean }[];
   } | null>(null);
 
-  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
   const isEn = locale === 'en';
 
-  useEffect(() => {
-    const SpeechRecognition =
-      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
-      setRecognitionSupported(false);
-      return;
-    }
-
-    try {
-      const recognition = new SpeechRecognition() as SpeechRecognitionInstance;
-      recognition.continuous = false;
-      recognition.interimResults = false;
-      recognition.lang = 'en-US';
-
-      recognition.onstart = () => {
-        setIsListening(true);
-        setSpeechError(null);
-        setTranscript('');
-        setScoreResult(null);
-      };
-
-      recognition.onresult = (event: SpeechRecognitionEvent) => {
-        const resultText = event.results[0][0].transcript;
-        setTranscript(resultText);
-
-        // Grade pronunciation accuracy comparison
-        const activeChallenge = challenges[currentIndex];
-        if (activeChallenge) {
-          const score = scorePronunciationSimilarity(activeChallenge.text, resultText);
-          setScoreResult(score);
-        }
-      };
-
-      recognition.onerror = (event: any) => {
-        console.error('Speech recognition error:', event);
-        setSpeechError(event.error || 'Failed to record speech');
-        setIsListening(false);
-      };
-
-      recognition.onend = () => {
-        setIsListening(false);
-      };
-
-      recognitionRef.current = recognition;
-    } catch (e) {
-      console.error(e);
-      setRecognitionSupported(false);
-    }
-  }, [currentIndex, challenges]);
+  const { speak } = useSpeechSynthesis();
+  const { isListening, isSupported: recognitionSupported, toggle: toggleListening } = useSpeechRecognition({
+    lang: 'en-US',
+    onStart: () => {
+      setSpeechError(null);
+      setTranscript('');
+      setScoreResult(null);
+    },
+    onResult: (resultText) => {
+      setTranscript(resultText);
+      const activeChallenge = challenges[currentIndex];
+      if (activeChallenge) {
+        setScoreResult(scorePronunciationSimilarity(activeChallenge.text, resultText));
+      }
+    },
+    onError: (code) => setSpeechError(t(getSpeechErrorMessageKey(code))),
+  });
 
   const handleSpeakReference = () => {
-    if (!('speechSynthesis' in window) || currentIndex >= challenges.length) return;
-    
-    window.speechSynthesis.cancel();
-    const activeChallenge = challenges[currentIndex];
-    
-    const utterance = new SpeechSynthesisUtterance(activeChallenge.text);
-    utterance.lang = 'en-US';
-    
-    const voices = window.speechSynthesis.getVoices();
-    const englishVoice = voices.find(v => v.lang.startsWith('en') && v.name.includes('Google'));
-    if (englishVoice) {
-      utterance.voice = englishVoice;
-    }
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const toggleListening = () => {
-    if (!recognitionRef.current) return;
-
-    if (isListening) {
-      recognitionRef.current.stop();
-    } else {
-      setSpeechError(null);
-      setScoreResult(null);
-      setTranscript('');
-      try {
-        recognitionRef.current.start();
-      } catch (err) {
-        console.error(err);
-      }
-    }
+    if (currentIndex >= challenges.length) return;
+    speak(challenges[currentIndex].text);
   };
 
   const handleNextChallenge = () => {
     if (currentIndex + 1 < challenges.length) {
       setCurrentIndex(prev => prev + 1);
-      setTranscript('');
-      setScoreResult(null);
-      setSpeechError(null);
     } else {
       // Loop back to start
       setCurrentIndex(0);
-      setTranscript('');
-      setScoreResult(null);
-      setSpeechError(null);
     }
+    setTranscript('');
+    setScoreResult(null);
+    setSpeechError(null);
   };
 
   if (challenges.length === 0) {
     return (
       <div className="card no-cards-card flex flex-col align-center justify-center text-center" style={{ maxWidth: '500px', margin: '40px auto' }}>
         <HelpCircle size={48} className="icon" style={{ color: 'var(--primary)', marginBottom: 'var(--spacing-md)' }} />
-        <h2 className="title-md">No Challenges</h2>
-        <p className="body-sm">Pronunciation challenges list is empty.</p>
+        <h2 className="title-md">{t('speaking.noChallengesTitle')}</h2>
+        <p className="body-sm">{t('speaking.noChallengesDesc')}</p>
       </div>
     );
   }
@@ -232,31 +130,32 @@ export const PronunciationPage: React.FC = () => {
             <button
               onClick={toggleListening}
               className={`mic-record-btn flex align-center justify-center ${isListening ? 'recording animate-pulse' : ''}`}
-              title={isListening ? 'Click to submit speech' : 'Click to start speaking'}
+              aria-pressed={isListening}
+              aria-label={isListening ? t('a11y.micStop') : t('a11y.micStart')}
             >
               <Mic size={32} />
             </button>
           ) : (
             <div className="flex flex-col align-center gap-xs">
-              <button className="mic-record-btn disabled" disabled>
+              <button className="mic-record-btn disabled" disabled aria-label={t('speech.unsupported')}>
                 <MicOff size={32} />
               </button>
-              <span className="body-xs text-error">Browser speech synthesis is not supported. Use Google Chrome.</span>
+              <span className="body-xs text-error">{t('speech.unsupported')}</span>
             </div>
           )}
 
-          <span className="body-xs" style={{ color: 'var(--text-secondary)' }}>
+          <span className="body-xs" style={{ color: 'var(--text-secondary)' }} aria-live="polite">
             {isListening 
-              ? (isEn ? 'Speak now. The microphone is actively listening...' : 'Đang thu âm... Hãy nói ngay.') 
+              ? t('speaking.listening')
               : (isEn ? 'Click the microphone to start recording yourself.' : 'Click vào micro để bắt đầu ghi âm và đánh giá.')
             }
           </span>
         </div>
 
         {speechError && (
-          <div className="error-banner flex align-center gap-xs" style={{ marginTop: 'var(--spacing-md)', width: '100%' }}>
+          <div className="error-banner flex align-center gap-xs" style={{ marginTop: 'var(--spacing-md)', width: '100%' }} role="alert">
             <AlertCircle size={18} />
-            <span className="body-xs">Speech Input Error: {speechError}</span>
+            <span className="body-xs">{speechError}</span>
           </div>
         )}
       </div>
@@ -270,7 +169,7 @@ export const PronunciationPage: React.FC = () => {
               <span className="title-xs">{isEn ? 'Pronunciation Grade' : 'Kết quả đánh giá phát âm'}</span>
             </div>
             
-            <div className="flex align-center gap-xs">
+            <div className="flex align-center gap-xs" aria-live="polite">
               <span className="body-sm font-bold" style={{ color: scoreResult.score >= 80 ? 'var(--success)' : 'var(--warning)' }}>
                 {scoreResult.score}% {isEn ? 'Accuracy' : 'Độ chính xác'}
               </span>
@@ -281,9 +180,10 @@ export const PronunciationPage: React.FC = () => {
             {scoreResult.words.map((item, idx) => (
               <span 
                 key={idx} 
-                className={`pron-word-badge ${item.isCorrect ? 'correct' : 'incorrect'}`}
-                title={item.isCorrect ? 'Correctly spoken' : 'Incorrect or omitted word'}
+                className={`pron-word-badge ${item.isCorrect ? 'correct' : 'incorrect'} flex align-center gap-xs`}
+                aria-label={item.isCorrect ? t('speaking.wordCorrect') : t('speaking.wordIncorrect')}
               >
+                {item.isCorrect ? <CheckCircle size={12} aria-hidden="true" /> : <X size={12} aria-hidden="true" />}
                 {item.word}
               </span>
             ))}
@@ -315,7 +215,7 @@ export const PronunciationPage: React.FC = () => {
       {/* Transcript text feedback */}
       {transcript && !scoreResult && (
         <div className="card text-center animate-fade-in" style={{ marginTop: 'var(--spacing-md)' }}>
-          <span className="body-xs text-tertiary uppercase block" style={{ marginBottom: '4px' }}>Transcribed Speech</span>
+          <span className="body-xs text-tertiary uppercase block" style={{ marginBottom: '4px' }}>{t('speaking.transcribedSpeech')}</span>
           <p className="body-md font-medium" style={{ color: 'var(--text-primary)' }}>"{transcript}"</p>
         </div>
       )}
