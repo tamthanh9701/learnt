@@ -74,6 +74,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       return;
     }
 
+    let loadingTimedOut = false;
+
+    // Safety net: force loading to false after 8s even if something hangs.
+    // Stale localStorage tokens pointing to an unreachable Supabase URL can
+    // cause fetchProfile to hang forever (no fetch timeout by default).
+    const safetyTimeout = setTimeout(() => {
+      if (!loadingTimedOut) {
+        loadingTimedOut = true;
+        console.warn('Auth loading timed out after 8s — forcing loading=false.');
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+      }
+    }, 8000);
+
     // Supabase mode initialization
     const initSession = async () => {
       try {
@@ -84,8 +99,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }
       } catch (err) {
         console.error('Error fetching session:', err);
+        // Clear stale session that might be causing the hang
+        try { await supabase.auth.signOut(); } catch (_) { /* ignore */ }
       } finally {
-        setLoading(false);
+        if (!loadingTimedOut) {
+          clearTimeout(safetyTimeout);
+          setLoading(false);
+        }
       }
     };
 
@@ -99,10 +119,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(null);
         setProfile(null);
       }
-      setLoading(false);
+      if (!loadingTimedOut) {
+        clearTimeout(safetyTimeout);
+        setLoading(false);
+      }
     });
 
     return () => {
+      clearTimeout(safetyTimeout);
       subscription.unsubscribe();
     };
   }, []);
