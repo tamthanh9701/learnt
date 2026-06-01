@@ -3,6 +3,9 @@
  * No SDK dependencies. Uses native fetch().
  *
  * Supported providers: Gemini, OpenAI, Anthropic, Ollama
+ *
+ * Every fetch() is wrapped with AbortController so a slow / hung backend
+ * cannot leave the UI in an infinite-loading state.
  */
 
 export type AIProvider = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'none';
@@ -18,6 +21,52 @@ export interface AIConfig {
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
   content: string;
+}
+
+// ---------------------------------------------------------------------------
+// Shared helpers
+// ---------------------------------------------------------------------------
+
+/** Default timeout for LLM provider requests (30 s). */
+const FETCH_TIMEOUT_MS = 30_000;
+
+class TimeoutError extends Error {
+  constructor(provider: string, ms: number) {
+    super(`${provider} request timed out after ${ms / 1000} s`);
+    this.name = 'TimeoutError';
+  }
+}
+
+function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): ReturnType<typeof fetch> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const signal = controller.signal;
+
+  return fetch(input, { ...init, signal }).finally(() => clearTimeout(timer));
+}
+
+async function guardedFetch(
+  provider: string,
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(input, init, timeoutMs);
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new TimeoutError(provider, timeoutMs);
+    }
+    throw err;
+  }
+
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`${provider} API error (${res.status}): ${err}`);
+  }
+
+  return res;
 }
 
 // ---------------------------------------------------------------------------
@@ -42,7 +91,7 @@ async function callGemini(config: AIConfig, messages: ChatMessage[]): Promise<st
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`;
 
-  const res = await fetch(url, {
+  const res = await guardedFetch('Gemini', url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -51,11 +100,6 @@ async function callGemini(config: AIConfig, messages: ChatMessage[]): Promise<st
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Gemini API error (${res.status}): ${err}`);
-  }
-
   const data = await res.json();
   const text = data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Empty response from Gemini');
@@ -63,7 +107,7 @@ async function callGemini(config: AIConfig, messages: ChatMessage[]): Promise<st
 }
 
 async function callOpenAI(config: AIConfig, messages: ChatMessage[]): Promise<string> {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+  const res = await guardedFetch('OpenAI', 'https://api.openai.com/v1/chat/completions', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -76,11 +120,6 @@ async function callOpenAI(config: AIConfig, messages: ChatMessage[]): Promise<st
       max_tokens: 2048,
     }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`OpenAI API error (${res.status}): ${err}`);
-  }
 
   const data = await res.json();
   const text = data?.choices?.[0]?.message?.content;
@@ -103,7 +142,7 @@ async function callAnthropic(config: AIConfig, messages: ChatMessage[]): Promise
     body.system = systemMsg;
   }
 
-  const res = await fetch('https://api.anthropic.com/v1/messages', {
+  const res = await guardedFetch('Anthropic', 'https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -114,11 +153,6 @@ async function callAnthropic(config: AIConfig, messages: ChatMessage[]): Promise
     body: JSON.stringify(body),
   });
 
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Anthropic API error (${res.status}): ${err}`);
-  }
-
   const data = await res.json();
   const text = data?.content?.[0]?.text;
   if (!text) throw new Error('Empty response from Anthropic');
@@ -128,7 +162,7 @@ async function callAnthropic(config: AIConfig, messages: ChatMessage[]): Promise
 async function callOllama(config: AIConfig, messages: ChatMessage[]): Promise<string> {
   const baseUrl = config.ollamaBaseUrl || 'http://localhost:11434';
 
-  const res = await fetch(`${baseUrl}/api/chat`, {
+  const res = await guardedFetch('Ollama', `${baseUrl}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -137,11 +171,6 @@ async function callOllama(config: AIConfig, messages: ChatMessage[]): Promise<st
       stream: false,
     }),
   });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Ollama API error (${res.status}): ${err}`);
-  }
 
   const data = await res.json();
   const text = data?.message?.content;
@@ -197,8 +226,14 @@ export const PROVIDER_MODELS: Record<AIProvider, { value: string; label: string 
   gemini: [
     { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
+    { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
+    { value: 'gemini-3-flash', label: 'Gemini 3 Flash' },
     { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
+    { value: 'gemini-flash-2.5', label: 'Gemini Flash 2.5 (v2)' },
+    { value: 'gemini-flash-2.0', label: 'Gemini Flash 2.0 (v2)' },
+    { value: 'gemini-pro', label: 'Gemini 1.5 Pro' },
+    { value: 'gemini-flash', label: 'Gemini 1.5 Flash' },
   ],
   openai: [
     { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },
