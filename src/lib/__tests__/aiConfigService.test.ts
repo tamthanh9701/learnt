@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 
 // vi.hoisted is required because vi.mock factories are hoisted to the top
 // of the file before the const declarations below run.
-const { mockChain, mockSupabase, setChainResult } = vi.hoisted(() => {
+const { mockSupabase, setChainResult } = vi.hoisted(() => {
   // The "result" that the chain resolves to when awaited. Tests can
   // change this between assertions to control what the chain returns.
   let result: { data: any; error: any } = { data: null, error: null };
@@ -39,7 +39,6 @@ const { mockChain, mockSupabase, setChainResult } = vi.hoisted(() => {
   const chain = new Proxy({}, handler);
 
   return {
-    mockChain: chain,
     mockSupabase: { from: vi.fn(() => chain) },
     setChainResult: setResult,
   };
