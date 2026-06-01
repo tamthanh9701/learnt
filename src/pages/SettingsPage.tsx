@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
-import { PROVIDER_MODELS, PROVIDER_LABELS } from '../lib/aiClient';
+import { PROVIDER_MODELS, PROVIDER_LABELS, testAIConnection } from '../lib/aiClient';
 import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
 import { Settings, User, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi } from 'lucide-react';
 
@@ -84,9 +84,20 @@ export const SettingsPage: React.FC = () => {
         model: aiModel,
         ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
       };
-      await updateConfig(newConfig);
-      setAiSaved(true);
-      setTimeout(() => setAiSaved(false), 3000);
+      const result = await updateConfig(newConfig);
+      if (result && !result.cloudOk) {
+        // Cloud sync failed (timeout, missing table, RLS, etc.) — local
+        // cache is still updated, but warn the user.
+        setAiTestResult({
+          success: false,
+          message: isEn
+            ? `Saved locally, but cloud sync failed: ${result.reason || 'unknown error'}`
+            : `Đã lưu cục bộ, nhưng đồng bộ đám mây thất bại: ${result.reason || 'lỗi không xác định'}`,
+        });
+      } else {
+        setAiSaved(true);
+        setTimeout(() => setAiSaved(false), 3000);
+      }
     } catch (err) {
       console.error(err);
     } finally {
@@ -105,12 +116,16 @@ export const SettingsPage: React.FC = () => {
         model: aiModel,
         ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
       };
-      await updateConfig(newConfig);
+      const result = await updateConfig(newConfig);
+      if (result && !result.cloudOk) {
+        // Don't block the network test on a cloud-sync failure — the local
+        // config is valid and that's what the test call uses.
+        console.warn('Cloud sync warning during test:', result.reason);
+      }
 
-      // Small delay to let context update
-      await new Promise(r => setTimeout(r, 200));
-
-      const { testAIConnection } = await import('../lib/aiClient');
+      // Test directly against the local newConfig — no need to wait for
+      // the context to re-render. AbortController inside aiClient caps
+      // the wait at 30 s, so aiTesting can never get stuck.
       const reply = await testAIConnection(newConfig);
       setAiTestResult({ success: true, message: reply.slice(0, 200) });
     } catch (err: any) {

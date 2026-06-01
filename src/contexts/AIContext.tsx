@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { useAuth } from './AuthContext';
 import { loadAIConfig, saveAIConfig } from '../lib/aiConfigService';
+import type { CloudResult } from '../lib/aiConfigService';
 import { callAIProvider, testAIConnection } from '../lib/aiClient';
 import type { AIConfig, AIProvider as AIProviderType, ChatMessage } from '../lib/aiClient';
 
@@ -11,8 +12,9 @@ interface AIContextType {
   isConfigured: boolean;
   /** Whether config is still loading from storage */
   loading: boolean;
-  /** Update and persist the AI configuration */
-  updateConfig: (newConfig: AIConfig) => Promise<void>;
+  /** Update and persist the AI configuration. Returns CloudResult
+   *  (cloudOk=false means cloud sync failed but local cache is written). */
+  updateConfig: (newConfig: AIConfig) => Promise<CloudResult>;
   /** Call the configured AI provider with messages. Returns AI reply text. */
   callAI: (messages: ChatMessage[]) => Promise<string>;
   /** Test the current AI connection. Returns reply or throws. */
@@ -55,11 +57,12 @@ export const AIConfigProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const isConfigured = config.provider !== 'none' && !!config.apiKey && !!config.model;
 
-  const updateConfig = useCallback(async (newConfig: AIConfig) => {
+  const updateConfig = useCallback(async (newConfig: AIConfig): Promise<CloudResult> => {
     setConfig(newConfig);
     if (user) {
-      await saveAIConfig(user.id, newConfig, isMock);
+      return saveAIConfig(user.id, newConfig, isMock);
     }
+    return { cloudOk: true };
   }, [user, isMock]);
 
   const callAI = useCallback(async (messages: ChatMessage[]): Promise<string> => {
