@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Flame, BookOpen, Mic, PenTool, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import { supabase } from '../lib/supabase';
+import { withTimeout, TimeoutError } from '../lib/timeout';
 import { displayStreak, dayKey } from '../lib/streak';
 
 export const DashboardPage: React.FC = () => {
@@ -47,37 +48,61 @@ export const DashboardPage: React.FC = () => {
           setReviewedToday(0);
         }
       } else {
-        // Fetch from Supabase
-        // 1. Count due cards
+        // Fetch from Supabase — each query gets its own 8 s AbortController
+        // timeout so a slow / hung backend cannot leave setLoading(false)
+        // un-called and the user staring at the spinner forever.
         const now = new Date().toISOString();
-        const { count, error: cardError } = await supabase
-          .from('learner_cards')
-          .select('*', { count: 'exact', head: true })
-          .eq('learner_id', user.id)
-          .lte('due', now);
+        const today = dayKey(new Date());
 
-        if (cardError) throw cardError;
-        if (count !== null) {
-          setDueCount(count);
-        }
+        // 1. Count due cards.
+        const cardRes = await withTimeout(
+          async (signal) => {
+            const { count, error } = await supabase
+              .from('learner_cards')
+              .select('*', { count: 'exact', head: true })
+              .eq('learner_id', user.id)
+              .lte('due', now)
+              .abortSignal(signal);
+            if (error) throw error;
+            return count;
+          },
+          8_000,
+          'DashboardPage: due cards count',
+        );
+        if (typeof cardRes === 'number') setDueCount(cardRes);
 
-        // 2. Fetch today's progress
-        const today = new Date().toISOString().split('T')[0];
-        const { data, error: progError } = await supabase
-          .from('daily_progress')
-          .select('cards_reviewed')
-          .eq('learner_id', user.id)
-          .eq('activity_date', today)
-          .single();
-
-        if (progError && progError.code !== 'PGRST116') throw progError;
-        if (data) {
-          setReviewedToday(data.cards_reviewed);
+        // 2. Fetch today's progress.
+        const progRes = await withTimeout(
+          async (signal) => {
+            const { data, error } = await supabase
+              .from('daily_progress')
+              .select('cards_reviewed')
+              .eq('learner_id', user.id)
+              .eq('activity_date', today)
+              .abortSignal(signal)
+              .maybeSingle();
+            // PGRST116 = row not found, perfectly fine here.
+            if (error && error.code !== 'PGRST116') throw error;
+            return data;
+          },
+          8_000,
+          'DashboardPage: daily progress',
+        );
+        if (progRes) {
+          setReviewedToday(progRes.cards_reviewed);
         }
       }
     } catch (err) {
-      console.error('Error fetching dashboard stats:', err);
-      setStatsError(true);
+      // A TimeoutError here just means the cloud was slow / unreachable;
+      // we degrade gracefully to "0" rather than spinning forever.
+      if (err instanceof TimeoutError) {
+        console.warn('Dashboard stats timed out — showing zeros:', err.message);
+        setDueCount(0);
+        setReviewedToday(0);
+      } else {
+        console.error('Error fetching dashboard stats:', err);
+        setStatsError(true);
+      }
     } finally {
       setLoading(false);
     }

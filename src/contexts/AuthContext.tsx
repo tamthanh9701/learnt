@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { supabase } from '../lib/supabase';
+import { withTimeout } from '../lib/timeout';
 import type { User } from '@supabase/supabase-js';
 
 export interface UserProfile {
@@ -133,12 +134,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const fetchProfile = async (userId: string) => {
     try {
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('id', userId)
-        .single();
-      
+      const profileRes = await withTimeout(
+        async (signal) => {
+          const res = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .abortSignal(signal)
+            .maybeSingle();
+          return res;
+        },
+        6_000,
+        'AuthContext: fetchProfile',
+      );
+
+      const { data: row, error } = profileRes;
       if (error) {
         if (error.code === 'PGRST116') {
           // Profile doesn't exist, create it
@@ -150,13 +160,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             current_streak: 0,
             longest_streak: 0,
           };
-          const { error: insertError } = await supabase.from('profiles').insert(newProfile);
-          if (!insertError) setProfile(newProfile as UserProfile);
+          const insertRes = await withTimeout(
+            async (signal) => {
+              const r = await supabase
+                .from('profiles')
+                .insert(newProfile)
+                .abortSignal(signal);
+              return r;
+            },
+            6_000,
+            'AuthContext: createProfile',
+          );
+          if (!insertRes.error) setProfile(newProfile as UserProfile);
         } else {
           console.error('Error fetching profile:', error);
         }
-      } else {
-        setProfile(data as UserProfile);
+      } else if (row) {
+        setProfile(row as unknown as UserProfile);
       }
     } catch (err) {
       console.error('Error in fetchProfile:', err);

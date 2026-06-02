@@ -227,13 +227,8 @@ export const PROVIDER_MODELS: Record<AIProvider, { value: string; label: string 
     { value: 'gemini-2.5-flash', label: 'Gemini 2.5 Flash' },
     { value: 'gemini-2.5-pro', label: 'Gemini 2.5 Pro' },
     { value: 'gemini-2.5-flash-lite', label: 'Gemini 2.5 Flash Lite' },
-    { value: 'gemini-3-flash', label: 'Gemini 3 Flash' },
     { value: 'gemini-2.0-flash', label: 'Gemini 2.0 Flash' },
     { value: 'gemini-2.0-flash-lite', label: 'Gemini 2.0 Flash Lite' },
-    { value: 'gemini-flash-2.5', label: 'Gemini Flash 2.5 (v2)' },
-    { value: 'gemini-flash-2.0', label: 'Gemini Flash 2.0 (v2)' },
-    { value: 'gemini-pro', label: 'Gemini 1.5 Pro' },
-    { value: 'gemini-flash', label: 'Gemini 1.5 Flash' },
   ],
   openai: [
     { value: 'gpt-4o-mini', label: 'GPT-4o Mini' },

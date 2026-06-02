@@ -10,6 +10,7 @@
  */
 
 import { supabase } from './supabase';
+import { withTimeout, TimeoutError } from './timeout';
 import type { AIConfig, AIProvider } from './aiClient';
 
 const LOCAL_STORAGE_KEY = 'learnt_ai_config';
@@ -32,28 +33,6 @@ export interface CloudResult<T = void> {
   cloudOk: boolean;
   reason?: string;
   data?: T;
-}
-
-// ---------------------------------------------------------------------------
-// Shared helpers
-// ---------------------------------------------------------------------------
-
-/** Run an async fn with an AbortController + hard timeout. If the timer
- *  fires we throw a TimeoutError; the fn is allowed to complete in the
- *  background and its result is discarded. */
-async function withTimeout<T>(fn: (signal: AbortSignal) => Promise<T>, ms: number, label: string): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fn(controller.signal);
-  } catch (err: unknown) {
-    if (err instanceof DOMException && err.name === 'AbortError') {
-      throw new Error(`${label} timed out after ${ms / 1000} s`);
-    }
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -132,8 +111,6 @@ export async function loadAIConfig(userId: string, isMock: boolean): Promise<AIC
     }
     return rowToConfig(data);
   } catch (err: unknown) {
-    // PGRST116 (row not found) is no longer thrown by maybeSingle(), but
-    // we still handle it defensively in case of API version skew.
     if (err && typeof err === 'object' && 'code' in err && (err as { code: string }).code === 'PGRST116') {
       return getLocalConfig();
     }
@@ -162,8 +139,6 @@ export async function saveAIConfig(
       async (signal) => {
         const row = configToRow(userId, config);
 
-        // Try update first; if no row exists, insert. Using maybeSingle
-        // avoids throwing on the "no rows" case.
         const existing = await supabase
           .from('ai_configs')
           .select('id')
@@ -194,11 +169,10 @@ export async function saveAIConfig(
 
     return { cloudOk: true };
   } catch (err: unknown) {
-    // Extract a useful message from anything we catch — supabase errors
-    // are plain objects with a `message` field, native Errors have
-    // `.message`, and anything else falls back to String(err).
     let message: string;
-    if (err instanceof Error) {
+    if (err instanceof TimeoutError) {
+      message = err.message;
+    } else if (err instanceof Error) {
       message = err.message;
     } else if (err && typeof err === 'object' && 'message' in err) {
       message = String((err as { message: unknown }).message);
