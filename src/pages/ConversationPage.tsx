@@ -6,9 +6,10 @@ import { useAI } from '../contexts/AIContext';
 import { PROVIDER_LABELS } from '../lib/aiClient';
 import { fetchAIConversationResponse, fetchSpeakingSessionsHistory } from '../lib/speakingService';
 import type { ChatMessage } from '../lib/speakingService';
+import { isCompleteFeedback } from '../lib/aiFeedback';
 import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
-import { Mic, MicOff, Send, Volume2, ChevronLeft, User, Sparkles, RefreshCw, AlertCircle, Bot } from 'lucide-react';
+import { Mic, MicOff, Send, Volume2, ChevronLeft, User, Sparkles, RefreshCw, AlertCircle, Bot, ChevronDown, ChevronUp, CheckCircle, X, Lightbulb } from 'lucide-react';
 
 export const ConversationPage: React.FC = () => {
   const { user, isMock } = useAuth();
@@ -29,23 +30,42 @@ export const ConversationPage: React.FC = () => {
   // Speech + error states
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [replyError, setReplyError] = useState(false);
+  // Per-turn feedback-card expansion, keyed by message index (US-SPEAK-04 / BR-13).
+  // Toggling one turn never affects another; ephemeral (resets on reload).
+  const [expandedFeedback, setExpandedFeedback] = useState<Set<number>>(new Set());
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const isEn = locale === 'en';
 
   const { speak, cancel } = useSpeechSynthesis();
-  const { isListening, isSupported: recognitionSupported, toggle: toggleListening } = useSpeechRecognition({
+  const {
+    isListening,
+    isSupported: recognitionSupported,
+    interimTranscript,
+    toggle: toggleListening,
+  } = useSpeechRecognition({
     lang: 'en-US',
+    continuous: true,
+    interimResults: true,
     onStart: () => setSpeechError(null),
     onResult: (transcript) => setInputText(prev => (prev ? prev + ' ' + transcript : transcript)),
     onError: (code) => setSpeechError(t(getSpeechErrorMessageKey(code))),
   });
 
-  // Scroll to bottom when messages update
+  const toggleFeedback = (index: number) => {
+    setExpandedFeedback(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
+  };
+
+  // Scroll to bottom when messages update (and as interim transcript grows live)
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, interimTranscript]);
 
   // Load existing session if sessionId parameter is supplied
   useEffect(() => {
@@ -141,8 +161,116 @@ export const ConversationPage: React.FC = () => {
     setInputText('');
     setActiveSessionStarted(false);
     setReplyError(false);
+    setExpandedFeedback(new Set());
     // Cancel voices
     cancel();
+  };
+
+  /**
+   * Render the per-turn feedback card under a Learner's bubble (BR-12/13/23).
+   * Three branches:
+   *  A. complete feedback, errors.length > 0  -> correction card
+   *  B. complete feedback, errors.length === 0 -> affirming "looks good" card
+   *  C. absent / incomplete                    -> null (no card, no toggle)
+   * Color is never the only signal: every state pairs an icon + text label.
+   */
+  const renderFeedbackCard = (msg: ChatMessage, index: number) => {
+    const fb = msg.feedback;
+    // Branch C: service collapses incomplete -> undefined; guard defensively anyway.
+    if (!isCompleteFeedback(fb)) return null;
+
+    const hasErrors = fb.errors.length > 0;
+    const isExpanded = expandedFeedback.has(index);
+    const cardId = `feedback-card-${index}`;
+    const betterPhrasing =
+      typeof fb.better_phrasing === 'string' && fb.better_phrasing.trim().length > 0
+        ? fb.better_phrasing.trim()
+        : null;
+
+    return (
+      <div className="feedback-card-wrap flex flex-col" style={{ alignItems: 'flex-end', width: '100%' }}>
+        <button
+          type="button"
+          className="feedback-toggle-btn flex align-center gap-xs body-xs"
+          onClick={() => toggleFeedback(index)}
+          aria-expanded={isExpanded}
+          aria-controls={cardId}
+          aria-label={t('a11y.toggleFeedback')}
+        >
+          {hasErrors ? (
+            <AlertCircle size={14} aria-hidden="true" style={{ color: 'var(--warning)' }} />
+          ) : (
+            <CheckCircle size={14} aria-hidden="true" style={{ color: 'var(--success)' }} />
+          )}
+          <span>
+            {hasErrors
+              ? `${t('speaking.feedbackErrors')} (${fb.errors.length})`
+              : t('speaking.feedbackLooksGood')}
+          </span>
+          {isExpanded ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+        </button>
+
+        {isExpanded && (
+          <div id={cardId} className="feedback-card animate-fade-in flex flex-col gap-sm" role="region" aria-label={t('speaking.feedback')}>
+            {/* Corrected text — shown for BOTH branches (the confirmed/rewritten sentence). */}
+            <div className="feedback-section flex flex-col">
+              <span className="body-xs font-semibold text-tertiary" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                {t('speaking.feedbackCorrected')}
+              </span>
+              <p className="body-sm" style={{ color: 'var(--text-primary)' }}>{fb.corrected_text}</p>
+            </div>
+
+            {hasErrors ? (
+              /* Branch A: discrete corrections list (color + icon + text). */
+              <div className="feedback-section flex flex-col gap-xs">
+                <span className="body-xs font-semibold text-tertiary" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  {t('speaking.feedbackErrors')}
+                </span>
+                <ul className="feedback-errors-list flex flex-col gap-xs" style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+                  {fb.errors.map((err, ei) => (
+                    <li key={ei} className="feedback-error-item flex flex-col">
+                      <span className="flex align-center gap-xs body-sm" style={{ flexWrap: 'wrap' }}>
+                        {typeof err.original === 'string' && err.original.length > 0 && (
+                          <span className="feedback-original flex align-center gap-xs">
+                            <X size={12} aria-hidden="true" style={{ color: 'var(--error)', flexShrink: 0 }} />
+                            <span style={{ textDecoration: 'line-through', color: 'var(--error)' }}>{err.original}</span>
+                          </span>
+                        )}
+                        {typeof err.correction === 'string' && err.correction.length > 0 && (
+                          <span className="feedback-correction flex align-center gap-xs">
+                            <CheckCircle size={12} aria-hidden="true" style={{ color: 'var(--success)', flexShrink: 0 }} />
+                            <span style={{ color: 'var(--success)', fontWeight: 600 }}>{err.correction}</span>
+                          </span>
+                        )}
+                      </span>
+                      {typeof err.explanation === 'string' && err.explanation.length > 0 && (
+                        <span className="body-xs text-secondary" style={{ marginLeft: '18px' }}>{err.explanation}</span>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : (
+              /* Branch B: affirming "looks good" — empty errors[] is a RESULT, not a gap. */
+              <div className="feedback-section flex align-center gap-xs">
+                <CheckCircle size={14} aria-hidden="true" style={{ color: 'var(--success)', flexShrink: 0 }} />
+                <span className="body-sm" style={{ color: 'var(--success)' }}>{t('speaking.feedbackLooksGood')}</span>
+              </div>
+            )}
+
+            {betterPhrasing && (
+              <div className="feedback-section flex flex-col">
+                <span className="body-xs font-semibold text-tertiary flex align-center gap-xs" style={{ textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+                  <Lightbulb size={12} aria-hidden="true" />
+                  {t('speaking.feedbackBetterPhrasing')}
+                </span>
+                <p className="body-sm" style={{ color: 'var(--text-primary)', fontStyle: 'italic' }}>{betterPhrasing}</p>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    );
   };
 
   return (
@@ -225,36 +353,53 @@ export const ConversationPage: React.FC = () => {
             {messages.map((msg, index) => {
               const isAssistant = msg.role === 'assistant';
               return (
-                <div key={index} className={`chat-bubble-row ${isAssistant ? 'assistant-row' : 'user-row'}`}>
-                  {isAssistant && (
-                    <div className="avatar assistant-avatar bg-primary-subtle text-primary">
-                      <Sparkles size={16} />
-                    </div>
-                  )}
-
-                  <div className={`chat-bubble ${isAssistant ? 'assistant-bubble' : 'user-bubble'}`}>
-                    <p className="body-sm whitespace-pre-wrap">{msg.content}</p>
-                    
+                <div key={index} className="flex flex-col" style={{ width: '100%' }}>
+                  <div className={`chat-bubble-row ${isAssistant ? 'assistant-row' : 'user-row'}`}>
                     {isAssistant && (
-                      <button 
-                        className="voice-speak-btn flex align-center justify-center" 
-                        onClick={() => speak(msg.content)}
-                        style={{ marginTop: '6px' }}
-                        aria-label={t('a11y.speakWord')}
-                      >
-                        <Volume2 size={14} />
-                      </button>
+                      <div className="avatar assistant-avatar bg-primary-subtle text-primary">
+                        <Sparkles size={16} />
+                      </div>
+                    )}
+
+                    <div className={`chat-bubble ${isAssistant ? 'assistant-bubble' : 'user-bubble'}`}>
+                      <p className="body-sm whitespace-pre-wrap">{msg.content}</p>
+
+                      {isAssistant && (
+                        <button
+                          className="voice-speak-btn flex align-center justify-center"
+                          onClick={() => speak(msg.content)}
+                          style={{ marginTop: '6px' }}
+                          aria-label={t('a11y.speakWord')}
+                        >
+                          <Volume2 size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {!isAssistant && (
+                      <div className="avatar user-avatar bg-secondary-subtle text-secondary">
+                        <User size={16} />
+                      </div>
                     )}
                   </div>
 
-                  {!isAssistant && (
-                    <div className="avatar user-avatar bg-secondary-subtle text-secondary">
-                      <User size={16} />
-                    </div>
-                  )}
+                  {/* Per-turn structured feedback under the Learner's bubble (BR-12/13/23) */}
+                  {!isAssistant && renderFeedbackCard(msg, index)}
                 </div>
               );
             })}
+            {/* Live interim transcript while the Learner is speaking (BR-16 / D4).
+                Provisional, non-committed text — muted + italic, announced politely. */}
+            {isListening && interimTranscript && (
+              <div className="chat-bubble-row user-row" aria-live="polite">
+                <div className="chat-bubble user-bubble interim-bubble" style={{ opacity: 0.7 }}>
+                  <p className="body-sm whitespace-pre-wrap" style={{ fontStyle: 'italic' }}>{interimTranscript}</p>
+                </div>
+                <div className="avatar user-avatar bg-secondary-subtle text-secondary">
+                  <Mic size={16} />
+                </div>
+              </div>
+            )}
             {submitting && (
               <div className="chat-bubble-row assistant-row">
                 <div className="avatar assistant-avatar bg-primary-subtle text-primary">
@@ -317,9 +462,12 @@ export const ConversationPage: React.FC = () => {
               <input
                 type="text"
                 className="input flex-1"
-                placeholder={isListening 
-                  ? (isEn ? 'Listening... Speak now' : 'Đang lắng nghe... Hãy nói ngay') 
-                  : (isEn ? 'Type your response here...' : 'Nhập câu trả lời của bạn...')
+                placeholder={
+                  !recognitionSupported
+                    ? t('speech.typingFallback')
+                    : isListening
+                      ? t('speech.listeningInterim')
+                      : t('speech.idleHint')
                 }
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
@@ -338,10 +486,11 @@ export const ConversationPage: React.FC = () => {
             </form>
 
             <span className="body-xs text-center" style={{ color: 'var(--text-tertiary)' }} aria-live="polite">
-              {isListening 
-                ? t('speaking.listening')
-                : (isEn ? 'You can speak using the microphone button or type using your keyboard.' : 'Bạn có thể nói bằng micro hoặc nhập từ bàn phím.')
-              }
+              {!recognitionSupported
+                ? t('speech.typingFallback')
+                : isListening
+                  ? t('speech.listeningInterim')
+                  : t('speech.idleHint')}
             </span>
           </div>
         </div>

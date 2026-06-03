@@ -23,6 +23,21 @@ export interface ChatMessage {
   content: string;
 }
 
+/**
+ * Optional per-call tuning. Currently carries the Gemini-only structured-output
+ * request (Change 3, BR-12). Non-Gemini providers ignore it — the strict system
+ * prompt + defensive parser (`parseStructuredReply`) remain the universal path.
+ */
+export interface AICallOptions {
+  /**
+   * Gemini-only: when set, the request asks Gemini to emit schema-valid JSON via
+   * `generationConfig.responseMimeType = "application/json"` +
+   * `generationConfig.responseSchema`. This is a reliability boost only; callers
+   * MUST still run the result through `parseStructuredReply` (defense in depth).
+   */
+  responseSchema?: Record<string, unknown>;
+}
+
 // ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
@@ -73,7 +88,7 @@ async function guardedFetch(
 // Provider-specific implementations
 // ---------------------------------------------------------------------------
 
-async function callGemini(config: AIConfig, messages: ChatMessage[]): Promise<string> {
+async function callGemini(config: AIConfig, messages: ChatMessage[], options?: AICallOptions): Promise<string> {
   // Gemini uses a different message format — convert
   const systemInstruction = messages.find(m => m.role === 'system')?.content;
   const contents = messages
@@ -87,7 +102,14 @@ async function callGemini(config: AIConfig, messages: ChatMessage[]): Promise<st
   if (systemInstruction) {
     body.systemInstruction = { parts: [{ text: systemInstruction }] };
   }
-  body.generationConfig = { temperature: 0.7, maxOutputTokens: 2048 };
+  const generationConfig: Record<string, unknown> = { temperature: 0.7, maxOutputTokens: 2048 };
+  // Gemini-only structured output (Change 3, BR-12). Additive: only set when a
+  // schema is requested; the result is STILL run through parseStructuredReply.
+  if (options?.responseSchema) {
+    generationConfig.responseMimeType = 'application/json';
+    generationConfig.responseSchema = options.responseSchema;
+  }
+  body.generationConfig = generationConfig;
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`;
 
@@ -188,11 +210,12 @@ async function callOllama(config: AIConfig, messages: ChatMessage[]): Promise<st
  */
 export async function callAIProvider(
   config: AIConfig,
-  messages: ChatMessage[]
+  messages: ChatMessage[],
+  options?: AICallOptions
 ): Promise<string> {
   switch (config.provider) {
     case 'gemini':
-      return callGemini(config, messages);
+      return callGemini(config, messages, options);
     case 'openai':
       return callOpenAI(config, messages);
     case 'anthropic':

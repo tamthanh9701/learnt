@@ -103,7 +103,19 @@
     "noChallengesDesc": "Pronunciation challenges list is empty.",
     "transcribedSpeech": "Transcribed Speech",
     "wordCorrect": "Correctly spoken",
-    "wordIncorrect": "Incorrect or omitted word"
+    "wordIncorrect": "Incorrect or omitted word",
+    "feedbackCorrected": "Corrected",
+    "feedbackErrors": "Corrections",
+    "feedbackBetterPhrasing": "More natural way to say it",
+    "feedbackLooksGood": "Looks good — no corrections needed.",
+    "modelDownloading": "Downloading pronunciation model (one-time)…",
+    "modelPreparing": "Preparing pronunciation engine…",
+    "modelError": "Couldn't load the pronunciation model. Using basic scoring instead.",
+    "phonemeGood": "Good",
+    "phonemeBorderline": "Almost",
+    "phonemeOff": "Needs work",
+    "historyTitle": "Practice history",
+    "historyEmpty": "No attempts yet — record your first sentence above."
   },
   "writing": {
     "title": "Writing Studio",
@@ -149,7 +161,11 @@
     "inputError": "Speech input error",
     "micDenied": "Microphone access was blocked. Allow it in your browser settings.",
     "unsupported": "Voice input isn't supported in this browser. Try Google Chrome.",
-    "noSpeech": "We didn't catch that. Please try again."
+    "noSpeech": "We didn't catch that. Please try again.",
+    "idleHint": "Tap the mic to speak, or type your reply.",
+    "listeningInterim": "Listening — keep speaking…",
+    "typingFallback": "Voice input isn't available — type your reply instead.",
+    "audioUnavailable": "Audio isn't available in this browser."
   },
   "errors": {
     "boundaryTitle": "Something went wrong",
@@ -166,6 +182,7 @@
     "micStop": "Stop voice input",
     "skipToMain": "Skip to main content",
     "closeMenu": "Close menu",
-    "toggleTheme": "Toggle theme"
+    "toggleTheme": "Toggle theme",
+    "toggleFeedback": "Show or hide feedback"
   }
 }

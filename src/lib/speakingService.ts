@@ -2,12 +2,28 @@ import { supabase } from './supabase';
 import { callAIProvider } from './aiClient';
 import type { AIConfig } from './aiClient';
 import type { ChatMessage as AIChatMessage } from './aiClient';
+import { parseStructuredReply } from './aiFeedback';
+import type { StructuredFeedback } from './aiFeedback';
+import {
+  serializePronunciationAttempt,
+  deserializePronunciationHistory,
+  PRONUNCIATION_TOPIC,
+} from './pronunciationHistory';
+import type { PronunciationAttempt, PronunciationSessionEntry } from './pronunciationHistory';
+import { withTimeout } from './timeout';
 import { recordActivity } from './streak';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  /**
+   * Structured feedback (Change 3, BR-12/BR-14). Present only on Learner ('user')
+   * turns that received complete feedback; absent on assistant turns and on
+   * plain-reply user turns. Optional/additive — older persisted rows that lack
+   * this key read back as `undefined`, so this does not break existing sessions.
+   */
+  feedback?: StructuredFeedback;
 }
 
 export interface ConversationSession {
@@ -89,6 +105,41 @@ const getMockAIResponse = (topic: string, history: ChatMessage[]): string => {
 };
 
 /**
+ * Gemini-only structured-output schema (Change 3, BR-12). Mirrors the
+ * `{reply, feedback:{corrected_text, errors[], better_phrasing?}}` contract so a
+ * Gemini call can emit schema-valid JSON directly. This is a reliability boost
+ * only — the result is ALWAYS run through `parseStructuredReply` (defense in
+ * depth), and non-Gemini providers rely on the strict system prompt + parser.
+ */
+const FEEDBACK_RESPONSE_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    reply: { type: 'string' },
+    feedback: {
+      type: 'object',
+      properties: {
+        corrected_text: { type: 'string' },
+        errors: {
+          type: 'array',
+          items: {
+            type: 'object',
+            properties: {
+              original: { type: 'string' },
+              correction: { type: 'string' },
+              explanation: { type: 'string' },
+            },
+            required: ['original', 'correction', 'explanation'],
+          },
+        },
+        better_phrasing: { type: 'string' },
+      },
+      required: ['corrected_text', 'errors'],
+    },
+  },
+  required: ['reply', 'feedback'],
+};
+
+/**
  * Triggers speaking conversation assistant response
  */
 export const fetchAIConversationResponse = async (
@@ -101,16 +152,34 @@ export const fetchAIConversationResponse = async (
   const now = new Date().toISOString();
   let response = '';
   let responseGenerated = false;
+  // Structured feedback for the Learner's just-sent turn (BR-12/BR-14). Stays
+  // undefined for mock / edge / non-structured / parse-failure paths (BR-15/BR-23).
+  let feedback: StructuredFeedback | undefined;
 
   // 1. Generate response
   // Try real AI provider first (if configured)
   if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
     try {
-      const systemPrompt = `You are a friendly English conversation tutor. The topic is "${topic}". 
-Keep your responses conversational, encouraging, and at an intermediate English level. 
-Ask follow-up questions to keep the conversation flowing.
-Gently correct any grammar mistakes the student makes.
-Keep responses concise (2-4 sentences).`;
+      const systemPrompt = `You are a friendly English conversation tutor helping a Vietnamese intermediate learner. The topic is "${topic}".
+
+Respond with a SINGLE JSON object ONLY — no markdown, no code fences, no prose before or after it — with this exact shape:
+{
+  "reply": "your conversational response to the learner",
+  "feedback": {
+    "corrected_text": "the learner's last message rewritten in correct, natural English",
+    "errors": [
+      { "original": "the learner's exact phrase", "correction": "the corrected phrase", "explanation": "a short, encouraging explanation in simple English" }
+    ],
+    "better_phrasing": "an optional, more natural way to express the same idea"
+  }
+}
+
+Rules:
+- "reply" is REQUIRED, non-empty: keep it conversational, encouraging, intermediate level, 2-4 sentences, and ask a follow-up question to keep the conversation flowing.
+- "feedback" corrects the LEARNER'S LAST message only (not your own reply).
+- "corrected_text" is REQUIRED and non-empty: if the learner's message is already correct, repeat it unchanged.
+- "errors" is REQUIRED and MUST be an array. If the learner made no mistakes, return an empty array []. Each item has "original", "correction", and "explanation".
+- "better_phrasing" is OPTIONAL: include it only when a more natural alternative exists; otherwise omit it.`;
 
       const messages: AIChatMessage[] = [
         { role: 'system', content: systemPrompt },
@@ -120,7 +189,17 @@ Keep responses concise (2-4 sentences).`;
         })),
       ];
 
-      response = await callAIProvider(aiConfig, messages);
+      // Gemini-only structured output; other providers rely on prompt + parser.
+      const callOptions =
+        aiConfig.provider === 'gemini'
+          ? { responseSchema: FEEDBACK_RESPONSE_SCHEMA }
+          : undefined;
+
+      const raw = await callAIProvider(aiConfig, messages, callOptions);
+      // Defense in depth (BR-15/BR-23): parse for all providers, never throws.
+      const parsed = parseStructuredReply(raw);
+      response = parsed.reply;
+      feedback = parsed.feedback;
       responseGenerated = true;
     } catch (err) {
       console.warn('AI provider call failed, falling back:', err);
@@ -150,8 +229,21 @@ Keep responses concise (2-4 sentences).`;
     });
   }
 
-  // 2. Save dialogue history
-  const fullHistory: ChatMessage[] = [...history, { role: 'assistant' as const, content: response, timestamp: now }];
+  // 2. Save dialogue history.
+  // Attach structured feedback (when complete) to the Learner's just-sent turn
+  // — the LAST 'user' message in history (BR-13/BR-14). Copy, don't mutate the
+  // caller's array. When feedback is undefined (mock/edge/non-Gemini/parse-fail/
+  // incomplete) the turn persists unchanged with feedback === undefined (BR-15/23).
+  const historyWithFeedback: ChatMessage[] = history.map((m, i) => {
+    if (feedback !== undefined && i === history.length - 1 && m.role === 'user') {
+      return { ...m, feedback };
+    }
+    return m;
+  });
+  const fullHistory: ChatMessage[] = [
+    ...historyWithFeedback,
+    { role: 'assistant' as const, content: response, timestamp: now },
+  ];
 
   if (isMock) {
     // Save to localStorage
@@ -274,14 +366,22 @@ export const scorePronunciationSimilarity = (reference: string, transcript: stri
 };
 
 /**
- * Fetch speaking conversation sessions history
+ * Fetch speaking conversation sessions history.
+ *
+ * Pronunciation attempts ride the SAME `speaking_sessions` store under the
+ * `PRONUNCIATION_TOPIC` sentinel (BR-20). The conversation read IGNORES those
+ * sentinel rows so the two histories never cross-contaminate (separation
+ * contract, TC-PRON-03-4).
  */
 export const fetchSpeakingSessionsHistory = async (
   userId: string,
   isMock: boolean
 ): Promise<ConversationSession[]> => {
   if (isMock) {
-    return JSON.parse(localStorage.getItem(`learnt_conversations_${userId}`) || '[]');
+    const sessions: ConversationSession[] = JSON.parse(
+      localStorage.getItem(`learnt_conversations_${userId}`) || '[]'
+    );
+    return sessions.filter(s => s.topic !== PRONUNCIATION_TOPIC);
   } else {
     const { data, error } = await supabase
       .from('speaking_sessions')
@@ -291,11 +391,112 @@ export const fetchSpeakingSessionsHistory = async (
 
     if (error) throw error;
 
-    return (data || []).map(row => ({
-      id: row.id,
-      topic: row.topic,
-      messages: row.dialogue_history || [],
-      created_at: row.created_at,
-    }));
+    return (data || [])
+      .filter(row => row.topic !== PRONUNCIATION_TOPIC)
+      .map(row => ({
+        id: row.id,
+        topic: row.topic,
+        messages: row.dialogue_history || [],
+        created_at: row.created_at,
+      }));
+  }
+};
+
+/**
+ * Persist a single pronunciation attempt (Change 4, D13 / BR-20).
+ *
+ * Each attempt is stored as a distinct `speaking_sessions` entry under the
+ * `PRONUNCIATION_TOPIC` sentinel (insert-per-attempt — there is no topic to
+ * upsert against). Mock and cloud round-trip through the SAME serializer
+ * (`serializePronunciationAttempt`) so the two modes are byte-equivalent.
+ * Privacy (NFR-27): only derived phoneme scores persist — never raw audio.
+ */
+export const savePronunciationAttempt = async (
+  userId: string,
+  attempt: PronunciationAttempt,
+  isMock: boolean
+): Promise<void> => {
+  const now = new Date().toISOString();
+  const entry: PronunciationSessionEntry = {
+    id: `pron-${Date.now()}`,
+    topic: PRONUNCIATION_TOPIC,
+    created_at: now,
+    attempt,
+  };
+  const serialized = serializePronunciationAttempt(entry);
+
+  if (isMock) {
+    // Mock parity: store as a speaking_sessions-shaped row in localStorage so
+    // the SAME deserializer reads it back (BR-20). Newest-first (unshift).
+    const rows: unknown[] = JSON.parse(
+      localStorage.getItem(`learnt_pron_${userId}`) || '[]'
+    );
+    rows.unshift(serialized);
+    localStorage.setItem(`learnt_pron_${userId}`, JSON.stringify(rows));
+  } else {
+    // Cloud: INSERT one row per attempt; dialogue_history carries the entry
+    // (BR-20). Wrapped in withTimeout (NFR-15, label 'pron-history').
+    try {
+      await withTimeout(
+        async () => {
+          const { error: dbError } = await supabase
+            .from('speaking_sessions')
+            .insert({
+              learner_id: userId,
+              topic: PRONUNCIATION_TOPIC,
+              dialogue_history: [serialized],
+            });
+          if (dbError) throw dbError;
+        },
+        8000,
+        'pron-history'
+      );
+    } catch (dbErr) {
+      console.error('Error saving pronunciation attempt to Supabase:', dbErr);
+    }
+  }
+};
+
+/**
+ * Read pronunciation attempt history, newest first (Change 4, D13 / BR-20).
+ *
+ * Reads ONLY sentinel rows via `deserializePronunciationHistory`; conversation
+ * rows are ignored (separation contract, TC-PRON-03-4). Mock and cloud parity.
+ * Defensive: on cloud read failure / timeout, degrades to [] rather than hang.
+ */
+export const fetchPronunciationHistory = async (
+  userId: string,
+  isMock: boolean
+): Promise<PronunciationSessionEntry[]> => {
+  if (isMock) {
+    const rows: unknown[] = JSON.parse(
+      localStorage.getItem(`learnt_pron_${userId}`) || '[]'
+    );
+    return deserializePronunciationHistory(rows);
+  } else {
+    try {
+      const rows = await withTimeout(
+        async () => {
+          const { data, error } = await supabase
+            .from('speaking_sessions')
+            .select('*')
+            .eq('learner_id', userId)
+            .eq('topic', PRONUNCIATION_TOPIC)
+            .order('created_at', { ascending: false });
+          if (error) throw error;
+          // Each attempt row stores its serialized entry as dialogue_history[0].
+          return (data || []).map(row => {
+            const dh = row.dialogue_history;
+            return Array.isArray(dh) ? dh[0] : dh;
+          });
+        },
+        8000,
+        'pron-history'
+      );
+      return deserializePronunciationHistory(rows);
+    } catch (dbErr) {
+      console.error('Error loading pronunciation history from Supabase:', dbErr);
+      return [];
+    }
   }
 };

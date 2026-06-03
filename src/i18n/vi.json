@@ -103,7 +103,19 @@
     "noChallengesDesc": "Danh sách thử thách phát âm đang trống.",
     "transcribedSpeech": "Nội dung đã chuyển thành văn bản",
     "wordCorrect": "Phát âm đúng",
-    "wordIncorrect": "Từ sai hoặc bị bỏ sót"
+    "wordIncorrect": "Từ sai hoặc bị bỏ sót",
+    "feedbackCorrected": "Câu đã sửa",
+    "feedbackErrors": "Lỗi cần sửa",
+    "feedbackBetterPhrasing": "Cách nói tự nhiên hơn",
+    "feedbackLooksGood": "Rất tốt — không có lỗi nào cần sửa.",
+    "modelDownloading": "Đang tải mô hình phát âm (chỉ một lần)…",
+    "modelPreparing": "Đang chuẩn bị công cụ phát âm…",
+    "modelError": "Không tải được mô hình phát âm. Đang dùng chấm điểm cơ bản.",
+    "phonemeGood": "Tốt",
+    "phonemeBorderline": "Gần đúng",
+    "phonemeOff": "Cần luyện thêm",
+    "historyTitle": "Lịch sử luyện tập",
+    "historyEmpty": "Chưa có lần thử nào — hãy ghi âm câu đầu tiên ở trên."
   },
   "writing": {
     "title": "Phòng luyện viết",
@@ -149,7 +161,11 @@
     "inputError": "Lỗi nhập bằng giọng nói",
     "micDenied": "Quyền truy cập micrô đã bị chặn. Hãy cho phép trong cài đặt trình duyệt của bạn.",
     "unsupported": "Trình duyệt này không hỗ trợ nhập bằng giọng nói. Hãy thử Google Chrome.",
-    "noSpeech": "Chúng tôi chưa nghe rõ. Vui lòng thử lại."
+    "noSpeech": "Chúng tôi chưa nghe rõ. Vui lòng thử lại.",
+    "idleHint": "Nhấn micro để nói, hoặc nhập câu trả lời.",
+    "listeningInterim": "Đang nghe — cứ nói tiếp…",
+    "typingFallback": "Không dùng được giọng nói — hãy nhập câu trả lời.",
+    "audioUnavailable": "Trình duyệt này không phát được âm thanh."
   },
   "errors": {
     "boundaryTitle": "Đã xảy ra sự cố",
@@ -166,6 +182,7 @@
     "micStop": "Dừng nhập bằng giọng nói",
     "skipToMain": "Chuyển đến nội dung chính",
     "closeMenu": "Đóng menu",
-    "toggleTheme": "Chuyển đổi giao diện"
+    "toggleTheme": "Chuyển đổi giao diện",
+    "toggleFeedback": "Hiện hoặc ẩn nhận xét"
   }
 }
