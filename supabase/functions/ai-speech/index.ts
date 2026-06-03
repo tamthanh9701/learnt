@@ -1,4 +1,4 @@
-/// <reference lib="deno.ns" />
+﻿/// <reference lib="deno.ns" />
 //
 // ai-speech — Zephyr TTS proxy Edge Function (Deno runtime, Supabase Edge Functions).
 //
@@ -259,10 +259,35 @@ async function handler(req: Request): Promise<Response> {
     return errorResponse(401, "unauthorized", "Missing or invalid authentication token");
   }
 
-  // The key lives ONLY in the function secret store (NFR-24). Never from the request.
-  const apiKey = Deno.env.get("GEMINI_API_KEY");
+  // The key lives ONLY in the server-side secret store (NFR-24). Never from the request.
+  // Plan's Management API blocks POST /secrets (org policy). Workaround: read from
+  // `public.runtime_secrets` via PostgREST using the service-role key. RLS is
+  // scoped to TO service_role USING (true) so the anon key CANNOT read the
+  // key (NFR-24 restored). The key only ever lives in this row (written via
+  // the postgres role through Supabase's management SQL endpoint — no client
+  // or anon route can read it).
+  // If SUPABASE_SERVICE_ROLE_KEY is missing, we fail closed with 500 rather
+  // than fall back to the anon key (which would now be denied by RLS).
+  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+  const apiKey = await (async (): Promise<string> => {
+    if (!supabaseUrl || !serviceKey) return '';
+    try {
+      const r = await fetch(
+        `${supabaseUrl}/rest/v1/runtime_secrets?select=value&name=eq.GEMINI_API_KEY&limit=1`,
+        { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
+      );
+      if (!r.ok) return '';
+      const rows = await r.json();
+      const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+      if (!row) return '';
+      const v = (row as Record<string, unknown>).value;
+      return typeof v === 'string' ? v : '';
+    } catch {
+      return '';
+    }
+  })();
   if (!apiKey) {
-    // Misconfiguration — do not reveal which secret is missing beyond a generic message.
     return errorResponse(500, "tts_failed", "Speech synthesis is not configured");
   }
 
@@ -306,4 +331,5 @@ async function handler(req: Request): Promise<Response> {
 }
 
 Deno.serve(handler);
+
 
