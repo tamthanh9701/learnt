@@ -1,0 +1,13 @@
+# toeic.txt — DEMO wordlist (TSL sample). ~10 words.
+# Replace with the full TOEIC Service List (~100-150 words) before a real content build.
+# One word per line. Lines starting with # are ignored.
+invoice
+shipment
+warranty
+reimburse
+deadline
+inventory
+vendor
+procurement
+quotation
+logistics

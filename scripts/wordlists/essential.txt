@@ -1,0 +1,13 @@
+# essential.txt — DEMO wordlist (NGSL-core sample). ~10 words.
+# Replace with the full NGSL core list (~100-150 words) before a real content build.
+# One word per line. Lines starting with # are ignored.
+people
+because
+important
+different
+example
+develop
+understand
+provide
+available
+necessary

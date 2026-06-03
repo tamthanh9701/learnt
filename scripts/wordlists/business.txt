@@ -1,0 +1,13 @@
+# business.txt — DEMO wordlist (BSL sample). ~10 words.
+# Replace with the full Business Service List (~100-150 words) before a real content build.
+# One word per line. Lines starting with # are ignored.
+revenue
+stakeholder
+acquisition
+leverage
+margin
+forecast
+liability
+merger
+incentive
+overhead
