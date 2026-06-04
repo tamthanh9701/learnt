@@ -6,6 +6,16 @@
  *
  * Every fetch() is wrapped with AbortController so a slow / hung backend
  * cannot leave the UI in an infinite-loading state.
+ *
+ * Error model (diagnosis 2026-06-04, finding F1):
+ *   For Gemini, non-OK responses are parsed into a discriminated union by
+ *   `parseGeminiError` and re-thrown as typed errors (QuotaExhaustedError,
+ *   AuthError, RateLimitError, ProviderError). Callers can `instanceof`-check
+ *   these to render actionable UI (e.g. "model exhausted, try one of these
+ *   working models") instead of a wall-of-JSON in a red banner.
+ *
+ *   Other providers (OpenAI / Anthropic / Ollama) throw ProviderError, the
+ *   generic fallback. Specific typing for them is deferred (F6 follow-up).
  */
 
 export type AIProvider = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'none';
@@ -39,6 +49,146 @@ export interface AICallOptions {
 }
 
 // ---------------------------------------------------------------------------
+// Typed error hierarchy (F1)
+// ---------------------------------------------------------------------------
+
+/** Discriminated union returned by `parseGeminiError`. */
+export type GeminiErrorKind = 'quota' | 'rate_limit' | 'auth' | 'other';
+
+export interface ParsedGeminiError {
+  kind: GeminiErrorKind;
+  model: string;
+  /** Seconds the caller should wait before retrying. 0 if unknown. */
+  retryAfter: number;
+  message: string;
+  /** Raw status from Gemini (e.g. "RESOURCE_EXHAUSTED"). undefined if not a Gemini envelope. */
+  status?: string;
+  /** Raw HTTP status from the response. */
+  httpStatus?: number;
+}
+
+/** Provider quota exhausted — usually free-tier limit reached. The user must switch model or upgrade. */
+export class QuotaExhaustedError extends Error {
+  readonly model: string;
+  readonly retryAfter: number;
+  constructor(model: string, retryAfter: number, message?: string) {
+    super(message ?? `Model "${model}" quota exhausted. Retry in ${retryAfter}s or switch to a working model.`);
+    this.name = 'QuotaExhaustedError';
+    this.model = model;
+    this.retryAfter = retryAfter;
+  }
+}
+
+/** Provider rate limit hit, but the quota itself is OK. Caller should retry after `retryAfter` seconds. */
+export class RateLimitError extends Error {
+  readonly model: string;
+  readonly retryAfter: number;
+  constructor(model: string, retryAfter: number, message?: string) {
+    super(message ?? `Model "${model}" rate-limited. Retry in ${retryAfter}s.`);
+    this.name = 'RateLimitError';
+    this.model = model;
+    this.retryAfter = retryAfter;
+  }
+}
+
+/** Auth failure — bad API key, expired token, etc. */
+export class AuthError extends Error {
+  readonly model: string;
+  constructor(model: string, message?: string) {
+    super(message ?? `Authentication failed for model "${model}". Check your API key.`);
+    this.name = 'AuthError';
+    this.model = model;
+  }
+}
+
+/** Generic fallback for any unrecognised provider error. */
+export class ProviderError extends Error {
+  readonly model: string;
+  readonly status: number;
+  constructor(model: string, status: number, message: string) {
+    super(`${model} provider error (${status}): ${message}`);
+    this.name = 'ProviderError';
+    this.model = model;
+    this.status = status;
+  }
+}
+
+/**
+ * Parse a Gemini error response body into a discriminated union. The Gemini
+ * envelope shape (per Google's AIP-193 / rpc error spec):
+ *
+ *   {
+ *     "error": {
+ *       "code": 429,                    // HTTP-style code
+ *       "message": "...",               // human-readable
+ *       "status": "RESOURCE_EXHAUSTED", // canonical status string
+ *       "details": [...]                // optional, e.g. QuotaFailure
+ *     }
+ *   }
+ *
+ * Retry-after is extracted from the message text when present
+ * ("Please retry in 44.7s" → ceil(44.7) = 45 seconds). If absent, defaults
+ * to 0 (caller decides what to do).
+ */
+export function parseGeminiError(body: string, model: string, httpStatus?: number): ParsedGeminiError {
+  const fallback: ParsedGeminiError = {
+    kind: 'other',
+    model,
+    retryAfter: 0,
+    message: body || '(empty error body)',
+    httpStatus,
+  };
+
+  if (!body) return fallback;
+
+  let parsed: { error?: { code?: number; message?: string; status?: string } };
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    // Body is not JSON — keep the raw text
+    return { ...fallback, message: body.slice(0, 500) };
+  }
+
+  const err = parsed.error;
+  if (!err || typeof err !== 'object') return fallback;
+
+  const message = err.message || '';
+  const status = err.status;
+  const retryAfter = extractRetryAfter(message);
+
+  // Quota exhaustion (free-tier limit, distinct from rate limit)
+  if (status === 'RESOURCE_EXHAUSTED' || /quota/i.test(message)) {
+    return { kind: 'quota', model, retryAfter, message, status, httpStatus: err.code ?? httpStatus };
+  }
+
+  // Rate limit (transient, not quota-related)
+  if (status === 'RATE_LIMIT_EXCEEDED' || /rate.?limit/i.test(message)) {
+    return { kind: 'rate_limit', model, retryAfter, message, status, httpStatus: err.code ?? httpStatus };
+  }
+
+  // Auth failures
+  if (
+    status === 'UNAUTHENTICATED' ||
+    status === 'PERMISSION_DENIED' ||
+    (err.code === 401 || err.code === 403)
+  ) {
+    return { kind: 'auth', model, retryAfter, message, status, httpStatus: err.code ?? httpStatus };
+  }
+
+  // Recognised envelope, unclassified status
+  return { kind: 'other', model, retryAfter, message, status, httpStatus: err.code ?? httpStatus };
+}
+
+/** Extract "Please retry in Ns" from a Gemini error message. Returns 0 if absent. */
+function extractRetryAfter(message: string): number {
+  const m = /retry in\s+([\d.]+)\s*s/i.exec(message);
+  if (!m || !m[1]) return 0;
+  const seconds = parseFloat(m[1]);
+  if (!Number.isFinite(seconds) || seconds <= 0) return 0;
+  return Math.ceil(seconds);
+}
+
+// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -60,6 +210,49 @@ function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs
   return fetch(input, { ...init, signal }).finally(() => clearTimeout(timer));
 }
 
+/**
+ * Gemini-specific guarded fetch: parses the error envelope and throws a
+ * typed error (QuotaExhaustedError / AuthError / RateLimitError / ProviderError)
+ * so callers can `instanceof`-check and render actionable UI.
+ *
+ * Other providers use the generic `guardedFetch` below, which throws
+ * `ProviderError` as a fallback.
+ */
+async function guardedFetchGemini(
+  model: string,
+  input: RequestInfo | URL,
+  init: RequestInit,
+  timeoutMs: number = FETCH_TIMEOUT_MS,
+): Promise<Response> {
+  let res: Response;
+  try {
+    res = await fetchWithTimeout(input, init, timeoutMs);
+  } catch (err: unknown) {
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new TimeoutError('Gemini', timeoutMs);
+    }
+    throw err;
+  }
+
+  if (!res.ok) {
+    const body = await res.text();
+    const parsed = parseGeminiError(body, model, res.status);
+    switch (parsed.kind) {
+      case 'quota':
+        throw new QuotaExhaustedError(parsed.model, parsed.retryAfter, parsed.message);
+      case 'rate_limit':
+        throw new RateLimitError(parsed.model, parsed.retryAfter, parsed.message);
+      case 'auth':
+        throw new AuthError(parsed.model, parsed.message);
+      case 'other':
+      default:
+        throw new ProviderError(parsed.model, res.status, parsed.message);
+    }
+  }
+
+  return res;
+}
+
 async function guardedFetch(
   provider: string,
   input: RequestInfo | URL,
@@ -78,7 +271,7 @@ async function guardedFetch(
 
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`${provider} API error (${res.status}): ${err}`);
+    throw new ProviderError(provider, res.status, err);
   }
 
   return res;
@@ -113,7 +306,7 @@ async function callGemini(config: AIConfig, messages: ChatMessage[], options?: A
 
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:generateContent`;
 
-  const res = await guardedFetch('Gemini', url, {
+  const res = await guardedFetchGemini(config.model, url, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

@@ -2,7 +2,7 @@
  * AI Config Service — CRUD for AI configuration.
  * Stores on Supabase when connected, falls back to localStorage in mock mode.
  *
- * Every Supabase call is wrapped with an AbortController + 10 s timeout so a
+ * Every Supabase call is wrapped with an AbortController + 5 s timeout so a
  * slow / hung backend or a missing table cannot leave the UI in an infinite
  * loading state. Cloud-sync failures are non-fatal: the local cache is
  * always written first and we return a structured result so callers can

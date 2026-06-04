@@ -3,7 +3,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { PROVIDER_MODELS, PROVIDER_LABELS, testAIConnection } from '../lib/aiClient';
+import { QuotaExhaustedError, RateLimitError, AuthError } from '../lib/aiClient';
 import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
+import { useFormDirtyReact } from '../hooks/useFormDirty';
 import { Settings, User, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi } from 'lucide-react';
 
 const AI_PROVIDERS: { value: AIProviderType; label: string }[] = [
@@ -36,13 +38,22 @@ export const SettingsPage: React.FC = () => {
 
   const isEn = locale === 'en';
 
-  // Sync local state when savedConfig changes (e.g. on initial load)
+  // F2 (diagnosis 2026-06-04): the dirty-flag ref prevents useEffect on
+  // [savedConfig] from clobbering characters the user is still typing. Set
+  // to true in onChange handlers of the 4 form fields; reset to false after
+  // a successful Save (see handleSaveAIConfig).
+  const dirty = useFormDirtyReact();
+
+  // Sync local state when savedConfig changes (e.g. on initial load).
+  // Guarded by `dirty.isDirty()` — if the user is mid-edit, the sync is a
+  // no-op so the user's typed characters are preserved.
   useEffect(() => {
+    if (dirty.isDirty()) return;
     setAiProvider(savedConfig.provider);
     setAiApiKey(savedConfig.apiKey);
     setAiModel(savedConfig.model);
     setAiOllamaUrl(savedConfig.ollamaBaseUrl || 'http://localhost:11434');
-  }, [savedConfig]);
+  }, [savedConfig, dirty]);
 
   // Auto-select first model when provider changes
   useEffect(() => {
@@ -54,7 +65,7 @@ export const SettingsPage: React.FC = () => {
       setAiModel('');
       setAiApiKey('');
     }
-  }, [aiProvider]);
+  }, [aiProvider, aiModel]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -109,6 +120,9 @@ export const SettingsPage: React.FC = () => {
             : `Đã lưu cục bộ, nhưng đồng bộ đám mây thất bại: ${result.reason || 'lỗi không xác định'}`,
         });
       } else {
+        // F2: successful save — reset the dirty flag so future savedConfig
+        // changes (e.g. on next mount) sync the form state again.
+        dirty.markClean();
         setAiSaved(true);
         setTimeout(() => setAiSaved(false), 3000);
       }
@@ -130,7 +144,7 @@ export const SettingsPage: React.FC = () => {
     setAiTesting(true);
     setAiTestResult(null);
     
-    // Add a timeout to prevent infinite loading state (test + save should complete within 50s)
+    // Add a timeout to prevent infinite loading state (test should complete within 50s)
     const timeoutId = setTimeout(() => {
       setAiTesting(false);
       setAiTestResult({
@@ -139,35 +153,62 @@ export const SettingsPage: React.FC = () => {
           ? 'Connection test timed out. Please check your API key and network connection.'
           : 'Kiểm tra kết nối đã hết thời gian. Vui lòng kiểm tra khóa API và kết nối mạng của bạn.',
       });
-    }, 50000); // 50 second timeout (5s save + 30s API test + 15s buffer)
+    }, 50000); // 50 second timeout (30s API test + 20s buffer)
     
     try {
-      // Save first so the context uses the latest config
+      // F3 (diagnosis 2026-06-04): the Test button should verify the form's
+      // current state, not write to the cloud. Previously every Test click
+      // triggered a Supabase upsert — 5 clicks = 5 wasted writes. The user
+      // wanting to "save" their config should hit Save first; Test is
+      // strictly a network round-trip with the form's local state.
       const newConfig: AIConfig = {
         provider: aiProvider,
         apiKey: aiApiKey,
         model: aiModel,
         ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
       };
-      const result = await updateConfig(newConfig);
-      if (result && !result.cloudOk) {
-        // Don't block the network test on a cloud-sync failure — the local
-        // config is valid and that's what the test call uses.
-        console.warn('Cloud sync warning during test:', result.reason);
-      }
 
-      // Test directly against the local newConfig — no need to wait for
-      // the context to re-render. AbortController inside aiClient caps
-      // the wait at 60 s, so aiTesting can never get stuck.
+      // Test directly against the local newConfig. AbortController inside
+      // aiClient caps the wait at 30 s, so aiTesting can never get stuck.
       const reply = await testAIConnection(newConfig);
       clearTimeout(timeoutId);
       setAiTestResult({ success: true, message: reply.slice(0, 200) });
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearTimeout(timeoutId);
-      setAiTestResult({ 
-        success: false, 
-        message: err.message || isEn ? 'Connection failed' : 'Kết nối thất bại' 
-      });
+      // F1b (diagnosis 2026-06-04): render actionable UI for typed errors.
+      // For QuotaExhaustedError, surface a model-swap hint so users with
+      // an exhausted cached model see "try X instead" instead of a wall of
+      // JSON. AuthError / RateLimitError get clear single-line messages.
+      if (err instanceof QuotaExhaustedError) {
+        const working = PROVIDER_MODELS.gemini
+          .map(m => m.value)
+          .filter(v => v !== err.model)
+          .slice(0, 3)
+          .join(', ');
+        setAiTestResult({
+          success: false,
+          message: isEn
+            ? `Model "${err.model}" is quota-exhausted (free tier limit reached). Try one of these: ${working}.`
+            : `Mô hình "${err.model}" đã hết hạn ngạch. Hãy thử một trong: ${working}.`,
+        });
+      } else if (err instanceof RateLimitError) {
+        setAiTestResult({
+          success: false,
+          message: isEn
+            ? `Rate-limited by "${err.model}". Wait ${err.retryAfter}s and try again.`
+            : `Bị giới hạn tốc độ bởi "${err.model}". Đợi ${err.retryAfter}s rồi thử lại.`,
+        });
+      } else if (err instanceof AuthError) {
+        setAiTestResult({
+          success: false,
+          message: isEn
+            ? `Authentication failed for "${err.model}". Check your API key.`
+            : `Xác thực thất bại với "${err.model}". Vui lòng kiểm tra khóa API.`,
+        });
+      } else {
+        const msg = err instanceof Error ? err.message : (isEn ? 'Connection failed' : 'Kết nối thất bại');
+        setAiTestResult({ success: false, message: msg });
+      }
     } finally {
       setAiTesting(false);
     }
@@ -295,7 +336,10 @@ export const SettingsPage: React.FC = () => {
                 id="settings-ai-provider"
                 className="input"
                 value={aiProvider}
-                onChange={(e) => setAiProvider(e.target.value as AIProviderType)}
+                onChange={(e) => {
+                  setAiProvider(e.target.value as AIProviderType);
+                  dirty.markDirty();
+                }}
               >
                 {AI_PROVIDERS.map(p => (
                   <option key={p.value} value={p.value}>{p.label}</option>
@@ -315,7 +359,10 @@ export const SettingsPage: React.FC = () => {
                     type={showApiKey ? 'text' : 'password'}
                     className="input flex-1"
                     value={aiApiKey}
-                    onChange={(e) => setAiApiKey(e.target.value)}
+                    onChange={(e) => {
+                      setAiApiKey(e.target.value);
+                      dirty.markDirty();
+                    }}
                     placeholder={`${isEn ? 'Enter your' : 'Nhập'} ${PROVIDER_LABELS[aiProvider]} API key`}
                     style={{ paddingRight: '40px' }}
                   />
@@ -348,14 +395,17 @@ export const SettingsPage: React.FC = () => {
                 <label htmlFor="settings-ollama-url" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                   Ollama Base URL
                 </label>
-                <input
-                  id="settings-ollama-url"
-                  type="text"
-                  className="input"
-                  value={aiOllamaUrl}
-                  onChange={(e) => setAiOllamaUrl(e.target.value)}
-                  placeholder="http://localhost:11434"
-                />
+              <input
+                id="settings-ollama-url"
+                type="text"
+                className="input"
+                value={aiOllamaUrl}
+                onChange={(e) => {
+                  setAiOllamaUrl(e.target.value);
+                  dirty.markDirty();
+                }}
+                placeholder="http://localhost:11434"
+              />
                 <span className="body-xs text-tertiary" style={{ marginTop: '4px', display: 'block' }}>
                   {isEn 
                     ? 'URL of your Ollama server. Default: http://localhost:11434'
@@ -370,12 +420,15 @@ export const SettingsPage: React.FC = () => {
                 <label htmlFor="settings-ai-model" className="body-xs font-semibold" style={{ marginBottom: '4px', display: 'block' }}>
                   {isEn ? 'Model' : 'Mô hình AI'}
                 </label>
-                <select
-                  id="settings-ai-model"
-                  className="input"
-                  value={aiModel}
-                  onChange={(e) => setAiModel(e.target.value)}
-                >
+              <select
+                id="settings-ai-model"
+                className="input"
+                value={aiModel}
+                onChange={(e) => {
+                  setAiModel(e.target.value);
+                  dirty.markDirty();
+                }}
+              >
                   {availableModels.map(m => (
                     <option key={m.value} value={m.value}>{m.label}</option>
                   ))}
