@@ -87,7 +87,7 @@ export const SettingsPage: React.FC = () => {
           ? 'Save operation timed out. Your settings may not have been saved.'
           : 'Thao tác lưu đã hết thời gian. Cài đặt của bạn có thể chưa được lưu.',
       });
-    }, 20000); // 20 second timeout
+    }, 10000); // 10 second timeout (5s Supabase + buffer)
     
     try {
       const newConfig: AIConfig = {
@@ -130,7 +130,7 @@ export const SettingsPage: React.FC = () => {
     setAiTesting(true);
     setAiTestResult(null);
     
-    // Add a timeout to prevent infinite loading state (test + save should complete within 90s)
+    // Add a timeout to prevent infinite loading state (test + save should complete within 50s)
     const timeoutId = setTimeout(() => {
       setAiTesting(false);
       setAiTestResult({
@@ -139,7 +139,7 @@ export const SettingsPage: React.FC = () => {
           ? 'Connection test timed out. Please check your API key and network connection.'
           : 'Kiểm tra kết nối đã hết thời gian. Vui lòng kiểm tra khóa API và kết nối mạng của bạn.',
       });
-    }, 90000); // 90 second timeout for save + API test
+    }, 50000); // 50 second timeout (5s save + 30s API test + 15s buffer)
     
     try {
       // Save first so the context uses the latest config

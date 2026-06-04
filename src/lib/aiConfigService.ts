@@ -14,7 +14,7 @@ import { withTimeout, TimeoutError } from './timeout';
 import type { AIConfig, AIProvider } from './aiClient';
 
 const LOCAL_STORAGE_KEY = 'learnt_ai_config';
-const SUPABASE_TIMEOUT_MS = 10_000;
+const SUPABASE_TIMEOUT_MS = 5_000;
 
 export interface AIConfigRow {
   id?: string;

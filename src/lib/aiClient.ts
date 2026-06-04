@@ -42,8 +42,8 @@ export interface AICallOptions {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/** Default timeout for LLM provider requests (60 s). */
-const FETCH_TIMEOUT_MS = 60_000;
+/** Default timeout for LLM provider requests (30 s). */
+const FETCH_TIMEOUT_MS = 30_000;
 
 class TimeoutError extends Error {
   constructor(provider: string, ms: number) {
