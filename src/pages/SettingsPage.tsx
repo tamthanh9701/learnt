@@ -77,6 +77,18 @@ export const SettingsPage: React.FC = () => {
     setAiSaving(true);
     setAiSaved(false);
     setAiTestResult(null);
+    
+    // Add a timeout to prevent infinite loading state
+    const timeoutId = setTimeout(() => {
+      setAiSaving(false);
+      setAiTestResult({
+        success: false,
+        message: isEn
+          ? 'Save operation timed out. Your settings may not have been saved.'
+          : 'Thao tác lưu đã hết thời gian. Cài đặt của bạn có thể chưa được lưu.',
+      });
+    }, 15000); // 15 second timeout
+    
     try {
       const newConfig: AIConfig = {
         provider: aiProvider,
@@ -85,6 +97,8 @@ export const SettingsPage: React.FC = () => {
         ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
       };
       const result = await updateConfig(newConfig);
+      clearTimeout(timeoutId);
+      
       if (result && !result.cloudOk) {
         // Cloud sync failed (timeout, missing table, RLS, etc.) — local
         // cache is still updated, but warn the user.
@@ -99,7 +113,14 @@ export const SettingsPage: React.FC = () => {
         setTimeout(() => setAiSaved(false), 3000);
       }
     } catch (err) {
+      clearTimeout(timeoutId);
       console.error(err);
+      setAiTestResult({
+        success: false,
+        message: isEn
+          ? `Error: ${err instanceof Error ? err.message : 'Unknown error'}`
+          : `Lỗi: ${err instanceof Error ? err.message : 'Lỗi không xác định'}`,
+      });
     } finally {
       setAiSaving(false);
     }
@@ -108,6 +129,18 @@ export const SettingsPage: React.FC = () => {
   const handleTestConnection = async () => {
     setAiTesting(true);
     setAiTestResult(null);
+    
+    // Add a timeout to prevent infinite loading state (test + save should complete within 45s)
+    const timeoutId = setTimeout(() => {
+      setAiTesting(false);
+      setAiTestResult({
+        success: false,
+        message: isEn
+          ? 'Connection test timed out. Please check your API key and network connection.'
+          : 'Kiểm tra kết nối đã hết thời gian. Vui lòng kiểm tra khóa API và kết nối mạng của bạn.',
+      });
+    }, 45000); // 45 second timeout for save + test
+    
     try {
       // Save first so the context uses the latest config
       const newConfig: AIConfig = {
@@ -127,9 +160,14 @@ export const SettingsPage: React.FC = () => {
       // the context to re-render. AbortController inside aiClient caps
       // the wait at 30 s, so aiTesting can never get stuck.
       const reply = await testAIConnection(newConfig);
+      clearTimeout(timeoutId);
       setAiTestResult({ success: true, message: reply.slice(0, 200) });
     } catch (err: any) {
-      setAiTestResult({ success: false, message: err.message || 'Connection failed' });
+      clearTimeout(timeoutId);
+      setAiTestResult({ 
+        success: false, 
+        message: err.message || isEn ? 'Connection failed' : 'Kết nối thất bại' 
+      });
     } finally {
       setAiTesting(false);
     }
