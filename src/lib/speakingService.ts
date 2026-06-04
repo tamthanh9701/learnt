@@ -318,12 +318,16 @@ Rules:
           speaking_minutes: 1,
         });
       }
-
-      // Streak: any learning activity counts (centralized)
-      await recordActivity(userId, false, new Date(now));
     } catch (dbErr) {
+      // H2 (diagnosis 2026-06-05): cloud persistence failure is best-effort.
+      // We still call recordActivity below so the streak advances.
       console.error('Error saving conversation session to Supabase:', dbErr);
     }
+
+    // H2: recordActivity runs unconditionally. recordActivity's cloud mode
+    // has a localStorage fallback (H2 sub-fix in streak.ts), so the streak
+    // is preserved even if the cloud write throws here.
+    await recordActivity(userId, false, new Date(now));
   }
 
   return response;
@@ -452,9 +456,20 @@ export const savePronunciationAttempt = async (
         'pron-history'
       );
     } catch (dbErr) {
+      // H2 (diagnosis 2026-06-05): persistence failure is non-fatal; do NOT
+      // skip recordActivity because of it. The learner did the work and the
+      // streak should advance. Local in-memory state was already updated
+      // (the attempt is preserved client-side until the next page load).
       console.error('Error saving pronunciation attempt to Supabase:', dbErr);
     }
   }
+
+  // H1 (diagnosis 2026-06-05): Pronunciation Drill is a learning activity and
+  // must update the streak, same as the other 3 activity types. Was wired up
+  // for AI Conversation / Free Writing / Structured Exercise in S4 (CH2), but
+  // this helper was missed. Run unconditionally so cloud-save failures still
+  // count the activity (TC-PRON-STREAK-01/02).
+  await recordActivity(userId, isMock, new Date(now));
 };
 
 /**

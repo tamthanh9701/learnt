@@ -152,6 +152,32 @@ export function useSpeechRecognition(
     } catch {
       setIsSupported(false);
     }
+
+    // H3 (diagnosis 2026-06-05): stop the recognition instance on unmount.
+    // Previously the effect had no cleanup, so navigating away mid-listen
+    // left the mic indicator ON in the browser and kept capturing audio —
+    // a privacy bug + resource leak. We also clear the accumulator and the
+    // listening flag so a re-mount starts fresh. Safe to call .stop() even
+    // if the instance is idle (it's a no-op in that case).
+    return () => {
+      const r = recognitionRef.current;
+      if (r) {
+        try {
+          // The type defs disallow null but the Web Speech API does accept
+          // null (and that's the only way to detach handlers). Cast through
+          // `any` to satisfy TypeScript without weakening the rest of the API.
+          (r as { onresult: unknown }).onresult = null;
+          (r as { onstart: unknown }).onstart = null;
+          (r as { onend: unknown }).onend = null;
+          (r as { onerror: unknown }).onerror = null;
+          r.stop();
+        } catch {
+          // ignore — instance may already be stopped or detached
+        }
+        recognitionRef.current = null;
+      }
+      finalAccumRef.current = '';
+    };
   }, []);
 
   const start = () => {

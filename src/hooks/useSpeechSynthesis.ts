@@ -173,7 +173,14 @@ function speakViaSpeechSynthesis(
   utterance.lang = lang;
   const voice = voices.find((v) => v.lang.startsWith('en') && v.name.includes('Google'));
   if (voice) utterance.voice = voice;
-  window.speechSynthesis.speak(utterance);
+  // H4 (diagnosis 2026-06-05): Chrome (and some other browsers) drops the
+  // first word/utterance when `speak()` is called synchronously right after
+  // `cancel()`. This is a long-known browser bug. Defer the `speak()` one
+  // microtask via setTimeout(..., 0) so the cancel has settled. `cancel()`
+  // itself is fire-and-forget, so this has no user-visible latency.
+  setTimeout(() => {
+    window.speechSynthesis.speak(utterance);
+  }, 0);
   return true;
 }
 

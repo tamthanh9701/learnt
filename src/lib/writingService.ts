@@ -256,6 +256,7 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
     return newSubmission;
   } else {
     // Save to writing_submissions table in Supabase
+    let cloudResult: { id: string; created_at: string } | null = null;
     try {
       const { data: dbData, error: dbError } = await supabase
         .from('writing_submissions')
@@ -270,6 +271,7 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
         .single();
 
       if (dbError) throw dbError;
+      cloudResult = { id: dbData.id, created_at: dbData.created_at };
 
       // Increment daily progress in Supabase
       const today = now.split('T')[0];
@@ -292,30 +294,37 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
           writing_count: 1,
         });
       }
-
-      // Streak: any learning activity counts (centralized)
-      await recordActivity(userId, false, new Date(now));
-
-      return {
-        id: dbData.id,
-        prompt: dbData.prompt,
-        content: dbData.content,
-        word_count: dbData.word_count,
-        ai_feedback: dbData.ai_feedback,
-        created_at: dbData.created_at,
-      };
     } catch (err) {
+      // H2 (diagnosis 2026-06-05): cloud persistence is best-effort. The
+      // learner still completed the activity and the streak must advance.
+      // We fall through to recordActivity (below) regardless of success.
       console.error('Failed to save writing submission to Supabase:', err);
-      // If saving to Supabase fails, return a simulated response as fallback
+    }
+
+    // H2: recordActivity runs unconditionally so a cloud save failure does
+    // NOT silently reset the streak. Same fix applied in exerciseService
+    // and speakingService (TC-WRITE-CLOUD-01 / TC-EXPROG-CLOUD-01 / etc.).
+    await recordActivity(userId, false, new Date(now));
+
+    if (cloudResult) {
       return {
-        id: `write-${Date.now()}`,
+        id: cloudResult.id,
         prompt,
         content,
         word_count: wordCount,
         ai_feedback: aiFeedback,
-        created_at: now,
+        created_at: cloudResult.created_at,
       };
     }
+    // Cloud failed — return a simulated response as fallback
+    return {
+      id: `write-${Date.now()}`,
+      prompt,
+      content,
+      word_count: wordCount,
+      ai_feedback: aiFeedback,
+      created_at: now,
+    };
   }
 };
 

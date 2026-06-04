@@ -261,12 +261,16 @@ export const recordExerciseCompletion = async (
           exercises_completed: 1,
         });
       }
-
-      // Streak: any learning activity counts (centralized)
-      await recordActivity(userId, false, new Date(now));
     } catch (err) {
+      // H2 (diagnosis 2026-06-05): cloud persistence failure is best-effort.
+      // We still call recordActivity below so the streak advances.
       console.error('Error saving exercise completion to Supabase:', err);
     }
+
+    // H2: recordActivity runs unconditionally. recordActivity's cloud mode
+    // has a localStorage fallback (H2 sub-fix in streak.ts), so the streak
+    // is preserved even if the cloud write throws here.
+    await recordActivity(userId, false, new Date(now));
   }
 };
 

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   analyzeGrammarMock,
   submitWritingContent,
@@ -13,8 +13,43 @@ import {
 
 const userId = 'learner-writing';
 
+// =============================================================================
+// H2 (diagnosis 2026-06-05): streak must advance on Free Writing completion
+// even when the cloud save fails. Previously `recordActivity` sat INSIDE the
+// cloud-save try block; if supabase.from('writing_submissions').insert() threw
+// (network / RLS / missing table), the catch short-circuited and the streak
+// was silently lost. Same pattern in exerciseService and speakingService
+// (fixed in the same diagnosis). The H2 mock is set up so the cloud writes
+// always fail.
+// =============================================================================
+const { mockSupabase, setChainResult } = vi.hoisted(() => {
+  let result: { data: any; error: any } = { data: null, error: null };
+  const setResult = (r: { data: any; error: any }) => { result = r; };
+  const handler: ProxyHandler<object> = {
+    get(_target, prop) {
+      if (prop === 'then') {
+        return (onFulfilled: (v: unknown) => unknown) => Promise.resolve(result).then(onFulfilled);
+      }
+      return () => new Proxy({}, handler);
+    },
+  };
+  const chain = new Proxy({}, handler);
+  return {
+    mockSupabase: {
+      from: vi.fn(() => chain),
+      functions: { invoke: vi.fn(async () => ({ data: null, error: { message: 'function not deployed' } })) },
+    },
+    setChainResult: setResult,
+  };
+});
+
+vi.mock('../supabase', () => ({ supabase: mockSupabase }));
+
 beforeEach(() => {
   localStorage.clear();
+  vi.clearAllMocks();
+  // Default: every supabase call fails. Tests that need happy path override.
+  setChainResult({ data: null, error: { code: '42P01', message: 'relation does not exist' } });
 });
 
 describe('analyzeGrammarMock (pure fn) [TC-GRAM]', () => {
@@ -74,5 +109,32 @@ describe('submitWritingContent mock fallback [TC-WRITE]', () => {
     const stored = JSON.parse(localStorage.getItem(`learnt_writing_submissions_${userId}`) || '[]');
     expect(stored[0].prompt).toBe('P2');
     expect(stored.length).toBe(2);
+  });
+});
+
+// =============================================================================
+// H2 cloud-failure regression — streak MUST still advance when save throws.
+// =============================================================================
+describe('submitWritingContent cloud failure (H2, diagnosis 2026-06-05) [TC-WRITE-CLOUD]', () => {
+  it('TC-WRITE-CLOUD-01 streak is advanced even when every Supabase call returns an error (the H2 bug)', async () => {
+    const today = new Date().toISOString().split('T')[0];
+
+    // The mock is set to throw on every supabase call (see beforeEach above).
+    const sub = await submitWritingContent(
+      userId,
+      'Streak under failure',
+      'I am submitting a writing piece while the cloud is down.',
+      false,
+    );
+
+    // The local write still happens so the user has feedback in hand.
+    expect(sub.id).toBeTruthy();
+    expect(sub.ai_feedback.overall_score).toBeGreaterThan(0);
+
+    // CRITICAL: the streak must STILL advance. Pre-H2 fix this assertion
+    // failed because recordActivity was inside the failing try block.
+    const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
+    expect(profile.current_streak).toBe(1);
+    expect(localStorage.getItem(`learnt_last_activity_${userId}`)).toBe(today);
   });
 });

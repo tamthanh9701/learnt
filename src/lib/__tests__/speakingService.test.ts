@@ -2,7 +2,9 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import {
   scorePronunciationSimilarity,
   fetchAIConversationResponse,
+  savePronunciationAttempt,
 } from '../speakingService';
+import type { PronunciationAttempt } from '../pronunciationHistory';
 
 // CHARACTERIZATION (protected baseline) - speakingService.
 // Pins CURRENT behavior of the pure pronunciation scorer and the
@@ -82,5 +84,117 @@ describe('fetchAIConversationResponse mock fallback [TC-AICONV]', () => {
 
     const progress = JSON.parse(localStorage.getItem(`learnt_progress_${userId}_${today}`) || '{}');
     expect(progress.speaking_minutes).toBe(1);
+  });
+});
+
+// =============================================================================
+// H1 (diagnosis 2026-06-05): Pronunciation Drill is a learning activity and
+// MUST update the streak. savePronunciationAttempt was not wired to
+// recordActivity, so a learner whose only daily activity is pronunciation
+// would see streak=0 in spite of having practiced. This is the same class of
+// bug that CH2 fixed for AI Conversation / Free Writing / Structured Exercise,
+// but Pronunciation Drill was missed (it lives in speakingService alongside
+// AI Conversation but its own persistence helper was not touched). TC-PRON-04.
+// =============================================================================
+describe('savePronunciationAttempt updates streak (H1, diagnosis 2026-06-05) [TC-PRON-STREAK]', () => {
+  const userId = 'learner-pron-streak';
+
+  const sampleAttempt: PronunciationAttempt = {
+    sentence: 'Hello world',
+    source_card_id: 'card-test-1',
+    overall_band: 'good',
+    phonemes: [
+      { phoneme: 'h', score: 95, band: 'good' },
+      { phoneme: 'ɛ', score: 88, band: 'good' },
+      { phoneme: 'l', score: 92, band: 'good' },
+    ],
+  };
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  it('TC-PRON-STREAK-01 (mock) a pronunciation attempt records activity + sets streak=1 (BR-STREAK parity with the other 3 activities)', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    await savePronunciationAttempt(userId, sampleAttempt, true);
+
+    const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
+    expect(profile.current_streak).toBe(1);
+    expect(localStorage.getItem(`learnt_last_activity_${userId}`)).toBe(today);
+  });
+
+  it('TC-PRON-STREAK-02 (mock) first attempt of the day with streak=prev pushes prev+1 (active yesterday path)', async () => {
+    const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    const today = new Date().toISOString().split('T')[0];
+    localStorage.setItem(`learnt_last_activity_${userId}`, yesterday);
+    localStorage.setItem(
+      `learnt_profile_${userId}`,
+      JSON.stringify({ current_streak: 4, longest_streak: 7 }),
+    );
+
+    await savePronunciationAttempt(userId, sampleAttempt, true);
+
+    const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
+    expect(profile.current_streak).toBe(5); // 4 (yesterday) + 1 (today)
+    expect(profile.longest_streak).toBe(7);
+    expect(localStorage.getItem(`learnt_last_activity_${userId}`)).toBe(today);
+  });
+});
+
+// =============================================================================
+// H2 (diagnosis 2026-06-05): AI Conversation must update streak even when
+// cloud persistence fails. recordActivity used to sit inside the failing
+// try block. Mocked here so the cloud writes throw — we still want the
+// streak to advance via the localStorage fallback in recordActivity.
+// =============================================================================
+import { vi } from 'vitest';
+
+const { mockSupabase, setChainResult } = vi.hoisted(() => {
+  let result: { data: any; error: any } = { data: null, error: null };
+  const setResult = (r: { data: any; error: any }) => { result = r; };
+  const handler: ProxyHandler<object> = {
+    get(_target, prop) {
+      if (prop === 'then') {
+        return (onFulfilled: (v: unknown) => unknown) => Promise.resolve(result).then(onFulfilled);
+      }
+      return () => new Proxy({}, handler);
+    },
+  };
+  const chain = new Proxy({}, handler);
+  return {
+    mockSupabase: {
+      from: vi.fn(() => chain),
+      functions: { invoke: vi.fn(async () => ({ data: null, error: { message: 'not deployed' } })) },
+    },
+    setChainResult: setResult,
+  };
+});
+
+vi.mock('../supabase', () => ({ supabase: mockSupabase }));
+
+describe('fetchAIConversationResponse cloud failure (H2, diagnosis 2026-06-05) [TC-AICONV-CLOUD]', () => {
+  const userId = 'learner-conv-cloud';
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    setChainResult({ data: null, error: { code: '42P01', message: 'relation does not exist' } });
+  });
+
+  it('TC-AICONV-CLOUD-01 streak is advanced even when every Supabase call returns an error (the H2 bug, AI Conversation path)', async () => {
+    const today = new Date().toISOString().split('T')[0];
+    const reply = await fetchAIConversationResponse(
+      userId,
+      'Education',
+      [{ role: 'user', content: 'Hello', timestamp: new Date().toISOString() }],
+      false, // isMock = false → cloud path runs → cloud throws
+    );
+    expect(typeof reply).toBe('string');
+    expect(reply.length).toBeGreaterThan(0);
+
+    // CRITICAL: streak must still advance via the recordActivity local-fallback.
+    const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
+    expect(profile.current_streak).toBe(1);
+    expect(localStorage.getItem(`learnt_last_activity_${userId}`)).toBe(today);
   });
 });

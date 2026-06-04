@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
@@ -24,6 +24,22 @@ export const SettingsPage: React.FC = () => {
   const [displayName, setDisplayName] = useState(profile?.display_name || user?.email?.split('@')[0] || '');
   const [updating, setUpdating] = useState(false);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
+
+  // H5 (diagnosis 2026-06-05): keep refs to every setTimeout the page
+  // schedules so a single useEffect cleanup on unmount cancels them all.
+  // Without this, navigating away during a 10s/50s wait would let the timer
+  // fire on an unmounted component (React 18+ silently ignores setState, but
+  // it is still wasted work and can mask real state-update bugs).
+  const timersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const trackTimer = (id: ReturnType<typeof setTimeout>) => {
+    timersRef.current.add(id);
+    return id;
+  };
+  const clearAllTimers = () => {
+    for (const id of timersRef.current) clearTimeout(id);
+    timersRef.current.clear();
+  };
+  useEffect(() => () => clearAllTimers(), []);
 
   // AI Config local state
   const [aiProvider, setAiProvider] = useState<AIProviderType>(savedConfig.provider);
@@ -76,7 +92,8 @@ export const SettingsPage: React.FC = () => {
       setSuccessMsg(null);
       await updateProfile({ display_name: displayName });
       setSuccessMsg(isEn ? 'Profile updated successfully!' : 'Đã cập nhật hồ sơ thành công!');
-      setTimeout(() => setSuccessMsg(null), 3000);
+      // H5: register this timer with the cleanup ref so unmount clears it.
+      trackTimer(setTimeout(() => setSuccessMsg(null), 3000));
     } catch (err) {
       console.error(err);
     } finally {
@@ -88,9 +105,10 @@ export const SettingsPage: React.FC = () => {
     setAiSaving(true);
     setAiSaved(false);
     setAiTestResult(null);
-    
+
     // Add a timeout to prevent infinite loading state
-    const timeoutId = setTimeout(() => {
+    const timeoutId = trackTimer(setTimeout(() => {
+      timersRef.current.delete(timeoutId);
       setAiSaving(false);
       setAiTestResult({
         success: false,
@@ -98,8 +116,8 @@ export const SettingsPage: React.FC = () => {
           ? 'Save operation timed out. Your settings may not have been saved.'
           : 'Thao tác lưu đã hết thời gian. Cài đặt của bạn có thể chưa được lưu.',
       });
-    }, 10000); // 10 second timeout (5s Supabase + buffer)
-    
+    }, 10000)); // 10 second timeout (5s Supabase + buffer)
+
     try {
       const newConfig: AIConfig = {
         provider: aiProvider,
@@ -109,7 +127,8 @@ export const SettingsPage: React.FC = () => {
       };
       const result = await updateConfig(newConfig);
       clearTimeout(timeoutId);
-      
+      timersRef.current.delete(timeoutId);
+
       if (result && !result.cloudOk) {
         // Cloud sync failed (timeout, missing table, RLS, etc.) — local
         // cache is still updated, but warn the user.
@@ -124,10 +143,13 @@ export const SettingsPage: React.FC = () => {
         // changes (e.g. on next mount) sync the form state again.
         dirty.markClean();
         setAiSaved(true);
-        setTimeout(() => setAiSaved(false), 3000);
+        const savedFlagTimer = trackTimer(setTimeout(() => setAiSaved(false), 3000));
+        // H5: clear from set on next tick to keep the registry accurate
+        setTimeout(() => timersRef.current.delete(savedFlagTimer), 3001);
       }
     } catch (err) {
       clearTimeout(timeoutId);
+      timersRef.current.delete(timeoutId);
       console.error(err);
       setAiTestResult({
         success: false,
@@ -143,9 +165,10 @@ export const SettingsPage: React.FC = () => {
   const handleTestConnection = async () => {
     setAiTesting(true);
     setAiTestResult(null);
-    
+
     // Add a timeout to prevent infinite loading state (test should complete within 50s)
-    const timeoutId = setTimeout(() => {
+    const timeoutId = trackTimer(setTimeout(() => {
+      timersRef.current.delete(timeoutId);
       setAiTesting(false);
       setAiTestResult({
         success: false,
@@ -153,8 +176,8 @@ export const SettingsPage: React.FC = () => {
           ? 'Connection test timed out. Please check your API key and network connection.'
           : 'Kiểm tra kết nối đã hết thời gian. Vui lòng kiểm tra khóa API và kết nối mạng của bạn.',
       });
-    }, 50000); // 50 second timeout (30s API test + 20s buffer)
-    
+    }, 50000)); // 50 second timeout (30s API test + 20s buffer)
+
     try {
       // F3 (diagnosis 2026-06-04): the Test button should verify the form's
       // current state, not write to the cloud. Previously every Test click
@@ -172,9 +195,11 @@ export const SettingsPage: React.FC = () => {
       // aiClient caps the wait at 30 s, so aiTesting can never get stuck.
       const reply = await testAIConnection(newConfig);
       clearTimeout(timeoutId);
+      timersRef.current.delete(timeoutId);
       setAiTestResult({ success: true, message: reply.slice(0, 200) });
     } catch (err: unknown) {
       clearTimeout(timeoutId);
+      timersRef.current.delete(timeoutId);
       // F1b (diagnosis 2026-06-04): render actionable UI for typed errors.
       // For QuotaExhaustedError, surface a model-swap hint so users with
       // an exhausted cached model see "try X instead" instead of a wall of
