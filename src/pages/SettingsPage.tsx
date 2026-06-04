@@ -87,7 +87,7 @@ export const SettingsPage: React.FC = () => {
           ? 'Save operation timed out. Your settings may not have been saved.'
           : 'Thao tác lưu đã hết thời gian. Cài đặt của bạn có thể chưa được lưu.',
       });
-    }, 15000); // 15 second timeout
+    }, 20000); // 20 second timeout
     
     try {
       const newConfig: AIConfig = {
@@ -130,7 +130,7 @@ export const SettingsPage: React.FC = () => {
     setAiTesting(true);
     setAiTestResult(null);
     
-    // Add a timeout to prevent infinite loading state (test + save should complete within 45s)
+    // Add a timeout to prevent infinite loading state (test + save should complete within 90s)
     const timeoutId = setTimeout(() => {
       setAiTesting(false);
       setAiTestResult({
@@ -139,7 +139,7 @@ export const SettingsPage: React.FC = () => {
           ? 'Connection test timed out. Please check your API key and network connection.'
           : 'Kiểm tra kết nối đã hết thời gian. Vui lòng kiểm tra khóa API và kết nối mạng của bạn.',
       });
-    }, 45000); // 45 second timeout for save + test
+    }, 90000); // 90 second timeout for save + API test
     
     try {
       // Save first so the context uses the latest config
@@ -158,7 +158,7 @@ export const SettingsPage: React.FC = () => {
 
       // Test directly against the local newConfig — no need to wait for
       // the context to re-render. AbortController inside aiClient caps
-      // the wait at 30 s, so aiTesting can never get stuck.
+      // the wait at 60 s, so aiTesting can never get stuck.
       const reply = await testAIConnection(newConfig);
       clearTimeout(timeoutId);
       setAiTestResult({ success: true, message: reply.slice(0, 200) });
