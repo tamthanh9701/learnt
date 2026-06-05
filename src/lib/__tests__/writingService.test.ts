@@ -45,6 +45,15 @@ const { mockSupabase, setChainResult } = vi.hoisted(() => {
 
 vi.mock('../supabase', () => ({ supabase: mockSupabase }));
 
+// G3 (diagnosis 2026-06-05): partial-mock aiClient so callAIProvider can be
+// forced to throw typed errors while the REAL error classes + classifyAIError
+// stay intact.
+const { mockCallAIProvider } = vi.hoisted(() => ({ mockCallAIProvider: vi.fn() }));
+vi.mock('../aiClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../aiClient')>();
+  return { ...actual, callAIProvider: mockCallAIProvider };
+});
+
 beforeEach(() => {
   localStorage.clear();
   vi.clearAllMocks();
@@ -136,5 +145,65 @@ describe('submitWritingContent cloud failure (H2, diagnosis 2026-06-05) [TC-WRIT
     const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
     expect(profile.current_streak).toBe(1);
     expect(localStorage.getItem(`learnt_last_activity_${userId}`)).toBe(today);
+  });
+});
+
+// =============================================================================
+// G3 (diagnosis 2026-06-05): Free Writing must surface AI errors instead of
+// silently falling back to analyzeGrammarMock. Same root cause as the
+// conversation flow — a quota-exhausted model produced a generic mock score
+// with no explanation, so the learner thought "AI doesn't work".
+// =============================================================================
+import { QuotaExhaustedError } from '../aiClient';
+import type { AIConfig, AIDiagnostic } from '../aiClient';
+
+describe('submitWritingContent surfaces AI errors (G3, diagnosis 2026-06-05) [TC-G3-WRITE]', () => {
+  const cfg: AIConfig = { provider: 'gemini', apiKey: 'AQ.test', model: 'gemini-2.0-flash' };
+
+  it('TC-G3-WRITE-01 calls onDiagnostic with reason:"quota" but still returns safe mock feedback', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new QuotaExhaustedError('gemini-2.0-flash', 30));
+    const diags: AIDiagnostic[] = [];
+
+    const sub = await submitWritingContent(
+      'learner-g3w-quota',
+      'Tech',
+      'I think technology helps students learn faster.',
+      true,
+      cfg,
+      (d) => diags.push(d),
+    );
+
+    // Graceful degradation: a valid mock feedback is still produced.
+    expect(sub.id).toBeTruthy();
+    expect(typeof sub.ai_feedback.overall_score).toBe('number');
+
+    // G3: failure is no longer silent.
+    expect(diags).toHaveLength(1);
+    expect(diags[0].reason).toBe('quota');
+    expect(diags[0].model).toBe('gemini-2.0-flash');
+  });
+
+  it('TC-G3-WRITE-02 calls onDiagnostic with reason:"invalid_shape" when the AI returns 200 with bad JSON', async () => {
+    // Valid JSON, but NOT a WritingFeedback (parses fine, fails validation).
+    mockCallAIProvider.mockResolvedValueOnce('{"unexpected":"shape","foo":123}');
+    const diags: AIDiagnostic[] = [];
+
+    await submitWritingContent(
+      'learner-g3w-shape',
+      'Tech',
+      'Some essay text here.',
+      true,
+      cfg,
+      (d) => diags.push(d),
+    );
+
+    expect(diags).toHaveLength(1);
+    expect(diags[0].reason).toBe('invalid_shape');
+  });
+
+  it('TC-G3-WRITE-03 backward-compatible: no onDiagnostic → no throw', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new QuotaExhaustedError('gemini-2.0-flash', 30));
+    const sub = await submitWritingContent('learner-g3w-compat', 'Tech', 'Essay.', true, cfg);
+    expect(sub.id).toBeTruthy();
   });
 });

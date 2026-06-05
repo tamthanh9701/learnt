@@ -113,6 +113,71 @@ export class ProviderError extends Error {
   }
 }
 
+// ---------------------------------------------------------------------------
+// AI diagnostics (G3, diagnosis 2026-06-05)
+// ---------------------------------------------------------------------------
+
+/**
+ * Why a learning flow (Conversation / Writing / Exercise) did NOT use the
+ * configured AI provider's answer and fell back to the local mock.
+ *
+ *   - `quota`           — provider quota exhausted (free-tier limit). The
+ *                         single biggest cause of "AI won't load" reports.
+ *   - `rate_limit`      — provider rate-limited; retry after N seconds.
+ *   - `auth`            — bad / revoked API key.
+ *   - `invalid_shape`   — provider replied 200 but the body didn't match the
+ *                         expected JSON contract (parse / validation failed).
+ *   - `not_configured`  — no provider set (provider==='none' or missing key/model).
+ *   - `edge_unavailable`— the Supabase Edge fallback failed / isn't deployed.
+ *   - `error`           — anything else (network, timeout, unknown).
+ */
+export type AIFallbackReason =
+  | 'quota'
+  | 'rate_limit'
+  | 'auth'
+  | 'invalid_shape'
+  | 'not_configured'
+  | 'edge_unavailable'
+  | 'error';
+
+export interface AIDiagnostic {
+  reason: AIFallbackReason;
+  /** Model that failed, when known. */
+  model?: string;
+  /** Seconds to wait before retrying (quota / rate_limit). 0/undefined if N/A. */
+  retryAfter?: number;
+  /** Human-readable detail for logs / UI. */
+  message: string;
+}
+
+/**
+ * Callback a learning flow invokes when it falls back instead of returning
+ * the configured provider's answer. The whole point of G3: the flow keeps
+ * degrading gracefully to the mock (so the Learner is never blocked), but it
+ * NO LONGER does so silently — the UI can surface WHY (e.g. "gemini-2.0-flash
+ * is quota-exhausted, switch to gemini-2.5-flash in Settings").
+ */
+export type AIDiagnosticHandler = (diagnostic: AIDiagnostic) => void;
+
+/**
+ * Map any error thrown by `callAIProvider` into a structured `AIDiagnostic`.
+ * Reuses the F1 typed-error hierarchy so quota / rate-limit / auth are
+ * distinguished from generic failures.
+ */
+export function classifyAIError(err: unknown): AIDiagnostic {
+  if (err instanceof QuotaExhaustedError) {
+    return { reason: 'quota', model: err.model, retryAfter: err.retryAfter, message: err.message };
+  }
+  if (err instanceof RateLimitError) {
+    return { reason: 'rate_limit', model: err.model, retryAfter: err.retryAfter, message: err.message };
+  }
+  if (err instanceof AuthError) {
+    return { reason: 'auth', model: err.model, message: err.message };
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  return { reason: 'error', message };
+}
+
 /**
  * Parse a Gemini error response body into a discriminated union. The Gemini
  * envelope shape (per Google's AIP-193 / rpc error spec):

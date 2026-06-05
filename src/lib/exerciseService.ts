@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
-import { callAIProvider } from './aiClient';
-import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
+import { callAIProvider, classifyAIError } from './aiClient';
+import type { AIConfig, AIDiagnosticHandler, ChatMessage as AIChatMessage } from './aiClient';
 import { recordActivity } from './streak';
 import { isValidExerciseList } from './llmValidation';
 
@@ -106,7 +106,8 @@ export const seedExercises: Record<string, ExerciseQuestion[]> = {
 export const fetchExercisesForTopic = async (
   topicId: string,
   isMock: boolean,
-  aiConfig?: AIConfig
+  aiConfig?: AIConfig,
+  onDiagnostic?: AIDiagnosticHandler
 ): Promise<ExerciseQuestion[]> => {
   // Try real AI provider first
   if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
@@ -157,9 +158,18 @@ Make exercises relevant, educational, and at intermediate English level.`;
       if (isValidExerciseList(exercises)) {
         return exercises;
       }
+      // G3 (diagnosis 2026-06-05): a 200 with the wrong shape is still a reason
+      // the AI "didn't work" — surface it instead of silent fallback.
       console.warn('AI provider returned invalid ExerciseQuestion[] shape, falling back.');
+      onDiagnostic?.({
+        reason: 'invalid_shape',
+        model: aiConfig.model,
+        message: 'AI returned a response that did not match the expected exercise format.',
+      });
     } catch (err) {
+      // G3: surface WHY (quota / auth / rate-limit / error) before falling back.
       console.warn('AI provider call failed for exercise generation, falling back:', err);
+      onDiagnostic?.(classifyAIError(err));
     }
   }
 
@@ -217,6 +227,14 @@ Make exercises relevant, educational, and at intermediate English level.`;
       return fetchExercisesForTopic(topicId, true);
     } catch (err) {
       console.warn('ai-generate-exercises function not available or failed. Falling back to local generation.', err);
+      // G3/G4: this branch's diagnostic only fires when the provider is
+      // unconfigured; a configured-but-failed provider already reported above.
+      if (!aiConfig || aiConfig.provider === 'none' || !aiConfig.apiKey || !aiConfig.model) {
+        onDiagnostic?.({
+          reason: 'not_configured',
+          message: 'No AI provider configured and the AI service is unavailable.',
+        });
+      }
       return fetchExercisesForTopic(topicId, true);
     }
   }

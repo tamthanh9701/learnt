@@ -148,6 +148,8 @@ describe('savePronunciationAttempt updates streak (H1, diagnosis 2026-06-05) [TC
 // streak to advance via the localStorage fallback in recordActivity.
 // =============================================================================
 import { vi } from 'vitest';
+import { QuotaExhaustedError, AuthError } from '../aiClient';
+import type { AIConfig, AIDiagnostic } from '../aiClient';
 
 const { mockSupabase, setChainResult } = vi.hoisted(() => {
   let result: { data: any; error: any } = { data: null, error: null };
@@ -171,6 +173,15 @@ const { mockSupabase, setChainResult } = vi.hoisted(() => {
 });
 
 vi.mock('../supabase', () => ({ supabase: mockSupabase }));
+
+// G3 (diagnosis 2026-06-05): partial-mock aiClient so we can force
+// callAIProvider to throw typed errors, while keeping the REAL error classes
+// (QuotaExhaustedError, etc.) and classifyAIError intact.
+const { mockCallAIProvider } = vi.hoisted(() => ({ mockCallAIProvider: vi.fn() }));
+vi.mock('../aiClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../aiClient')>();
+  return { ...actual, callAIProvider: mockCallAIProvider };
+});
 
 describe('fetchAIConversationResponse cloud failure (H2, diagnosis 2026-06-05) [TC-AICONV-CLOUD]', () => {
   const userId = 'learner-conv-cloud';
@@ -196,5 +207,102 @@ describe('fetchAIConversationResponse cloud failure (H2, diagnosis 2026-06-05) [
     const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
     expect(profile.current_streak).toBe(1);
     expect(localStorage.getItem(`learnt_last_activity_${userId}`)).toBe(today);
+  });
+});
+
+// =============================================================================
+// G3 (diagnosis 2026-06-05): learning flows must NOT swallow AI errors
+// silently. Pre-G3, when callAIProvider threw (e.g. QuotaExhaustedError because
+// the learner's model is free-tier exhausted), fetchAIConversationResponse
+// caught it, console.warn'd, and silently fell back to getMockAIResponse — the
+// learner saw a generic canned reply with no idea the real AI never ran. This
+// is the core of "gemini api won't load": the AI silently doesn't run.
+//
+// G3 fix: an optional `onDiagnostic` callback is invoked with a structured
+// AIDiagnostic BEFORE falling back, so the UI can tell the learner WHY (e.g.
+// quota exhausted -> switch model). The mock fallback still happens (graceful
+// degradation — the learner is never hard-blocked).
+// =============================================================================
+describe('fetchAIConversationResponse surfaces AI errors (G3, diagnosis 2026-06-05) [TC-G3-CONV]', () => {
+  const cfg: AIConfig = { provider: 'gemini', apiKey: 'AQ.test', model: 'gemini-2.0-flash' };
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.clearAllMocks();
+    setChainResult({ data: null, error: { code: '42P01', message: 'relation does not exist' } });
+  });
+
+  it('TC-G3-CONV-01 calls onDiagnostic with reason:"quota" when the model is quota-exhausted (was silent)', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new QuotaExhaustedError('gemini-2.0-flash', 23));
+    const diags: AIDiagnostic[] = [];
+
+    const reply = await fetchAIConversationResponse(
+      'learner-g3-quota',
+      'Travel',
+      [{ role: 'user', content: 'Hello', timestamp: new Date().toISOString() }],
+      true, // isMock — still persists locally, still falls back to mock reply
+      cfg,
+      (d) => diags.push(d),
+    );
+
+    // Graceful degradation preserved: a non-empty reply is still returned.
+    expect(typeof reply).toBe('string');
+    expect(reply.length).toBeGreaterThan(0);
+
+    // CRITICAL (G3): the failure is no longer silent.
+    expect(diags).toHaveLength(1);
+    expect(diags[0].reason).toBe('quota');
+    expect(diags[0].model).toBe('gemini-2.0-flash');
+    expect(diags[0].retryAfter).toBe(23);
+  });
+
+  it('TC-G3-CONV-02 calls onDiagnostic with reason:"auth" when the key is invalid', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new AuthError('gemini-2.5-flash', 'API key not valid'));
+    const diags: AIDiagnostic[] = [];
+
+    await fetchAIConversationResponse(
+      'learner-g3-auth',
+      'Food',
+      [{ role: 'user', content: 'Hi', timestamp: new Date().toISOString() }],
+      true,
+      cfg,
+      (d) => diags.push(d),
+    );
+
+    expect(diags).toHaveLength(1);
+    expect(diags[0].reason).toBe('auth');
+  });
+
+  it('TC-G3-CONV-03 does NOT call onDiagnostic when the provider succeeds', async () => {
+    mockCallAIProvider.mockResolvedValueOnce(
+      JSON.stringify({ reply: 'Great, let us talk about food!', feedback: { corrected_text: 'Hi', errors: [] } }),
+    );
+    const diags: AIDiagnostic[] = [];
+
+    const reply = await fetchAIConversationResponse(
+      'learner-g3-ok',
+      'Food',
+      [{ role: 'user', content: 'Hi', timestamp: new Date().toISOString() }],
+      true,
+      cfg,
+      (d) => diags.push(d),
+    );
+
+    expect(reply).toContain('food');
+    expect(diags).toHaveLength(0);
+  });
+
+  it('TC-G3-CONV-04 is backward-compatible: no onDiagnostic param → no throw, silent fallback still works', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new QuotaExhaustedError('gemini-2.0-flash', 23));
+    // No onDiagnostic passed — must not throw.
+    const reply = await fetchAIConversationResponse(
+      'learner-g3-compat',
+      'Travel',
+      [{ role: 'user', content: 'Hello', timestamp: new Date().toISOString() }],
+      true,
+      cfg,
+    );
+    expect(typeof reply).toBe('string');
+    expect(reply.length).toBeGreaterThan(0);
   });
 });

@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
-import { callAIProvider } from './aiClient';
-import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
+import { callAIProvider, classifyAIError } from './aiClient';
+import type { AIConfig, AIDiagnosticHandler, ChatMessage as AIChatMessage } from './aiClient';
 import { recordActivity } from './streak';
 import { isValidWritingFeedback } from './llmValidation';
 
@@ -161,7 +161,8 @@ export const submitWritingContent = async (
   prompt: string,
   content: string,
   isMock: boolean,
-  aiConfig?: AIConfig
+  aiConfig?: AIConfig,
+  onDiagnostic?: AIDiagnosticHandler
 ): Promise<WritingSubmission> => {
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const now = new Date().toISOString();
@@ -196,10 +197,19 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
         aiFeedback = parsed;
         feedbackGenerated = true;
       } else {
+        // G3 (diagnosis 2026-06-05): a 200 with the wrong shape is still a
+        // reason the AI "didn't work" — surface it instead of silent fallback.
         console.warn('AI provider returned invalid WritingFeedback shape, falling back.');
+        onDiagnostic?.({
+          reason: 'invalid_shape',
+          model: aiConfig.model,
+          message: 'AI returned a response that did not match the expected feedback format.',
+        });
       }
     } catch (err) {
+      // G3: surface WHY (quota / auth / rate-limit / error) before falling back.
       console.warn('AI provider call failed for writing feedback, falling back:', err);
+      onDiagnostic?.(classifyAIError(err));
     }
   }
 
@@ -218,6 +228,14 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
       }
     } catch (err) {
       console.warn('Supabase Edge Function failed or not deployed, falling back:', err);
+      // G3/G4: this branch's diagnostic only fires when the provider is
+      // unconfigured; a configured-but-failed provider already reported above.
+      if (!aiConfig || aiConfig.provider === 'none' || !aiConfig.apiKey || !aiConfig.model) {
+        onDiagnostic?.({
+          reason: 'not_configured',
+          message: 'No AI provider configured and the AI service is unavailable.',
+        });
+      }
     }
   }
 

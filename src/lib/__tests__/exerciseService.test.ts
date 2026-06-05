@@ -1,9 +1,11 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   fetchExercisesForTopic,
   recordExerciseCompletion,
   seedExercises,
 } from '../exerciseService';
+import { QuotaExhaustedError } from '../aiClient';
+import type { AIConfig, AIDiagnostic } from '../aiClient';
 
 // CHARACTERIZATION (protected baseline) - exerciseService.
 // Pins the CURRENT exercise-generation fallback (no provider -> seed/mock) and
@@ -11,10 +13,19 @@ import {
 // (AC-4.7: mcq accepted as-is, scope deferred). Must degrade to safe mock after
 // CH4 validation lands. Re-run: npx vitest run src/lib/__tests__/exerciseService.test.ts
 
+// G3 (diagnosis 2026-06-05): partial-mock aiClient so callAIProvider can be
+// forced to throw while keeping the real error classes + classifyAIError.
+const { mockCallAIProvider } = vi.hoisted(() => ({ mockCallAIProvider: vi.fn() }));
+vi.mock('../aiClient', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../aiClient')>();
+  return { ...actual, callAIProvider: mockCallAIProvider };
+});
+
 const userId = 'learner-exercise';
 
 beforeEach(() => {
   localStorage.clear();
+  vi.clearAllMocks();
 });
 
 describe('fetchExercisesForTopic mock/seed fallback [TC-EX]', () => {
@@ -63,5 +74,46 @@ describe('recordExerciseCompletion counter (mock) [TC-EXPROG]', () => {
     await recordExerciseCompletion(userId, true);
     const progress = JSON.parse(localStorage.getItem(`learnt_progress_${userId}_${today}`) || '{}');
     expect(progress.exercises_completed).toBe(2);
+  });
+});
+
+// =============================================================================
+// G3 (diagnosis 2026-06-05): Structured Exercise generation must surface AI
+// errors instead of silently returning seed/mock exercises. A quota-exhausted
+// model previously produced generic seed exercises with no explanation.
+// =============================================================================
+describe('fetchExercisesForTopic surfaces AI errors (G3, diagnosis 2026-06-05) [TC-G3-EX]', () => {
+  const cfg: AIConfig = { provider: 'gemini', apiKey: 'AQ.test', model: 'gemini-2.0-flash' };
+
+  it('TC-G3-EX-01 calls onDiagnostic with reason:"quota" but still returns a non-empty exercise set', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new QuotaExhaustedError('gemini-2.0-flash', 30));
+    const diags: AIDiagnostic[] = [];
+
+    const qs = await fetchExercisesForTopic('topic-technology', true, cfg, (d) => diags.push(d));
+
+    // Graceful degradation: seed/mock exercises still returned.
+    expect(qs.length).toBe(3);
+
+    // G3: failure is no longer silent.
+    expect(diags).toHaveLength(1);
+    expect(diags[0].reason).toBe('quota');
+    expect(diags[0].model).toBe('gemini-2.0-flash');
+  });
+
+  it('TC-G3-EX-02 calls onDiagnostic with reason:"invalid_shape" when the AI returns 200 with bad JSON', async () => {
+    // Valid JSON, but NOT an ExerciseQuestion[] (parses fine, fails validation).
+    mockCallAIProvider.mockResolvedValueOnce('{"not":"an array"}');
+    const diags: AIDiagnostic[] = [];
+
+    await fetchExercisesForTopic('topic-technology', true, cfg, (d) => diags.push(d));
+
+    expect(diags).toHaveLength(1);
+    expect(diags[0].reason).toBe('invalid_shape');
+  });
+
+  it('TC-G3-EX-03 backward-compatible: no onDiagnostic → no throw', async () => {
+    mockCallAIProvider.mockRejectedValueOnce(new QuotaExhaustedError('gemini-2.0-flash', 30));
+    const qs = await fetchExercisesForTopic('topic-technology', true, cfg);
+    expect(qs.length).toBe(3);
   });
 });

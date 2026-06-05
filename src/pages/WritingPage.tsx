@@ -8,7 +8,9 @@ import {
   seedWritingPrompts
 } from '../lib/writingService';
 import type { WritingPrompt, WritingSubmission } from '../lib/writingService';
-import { PenTool, CheckCircle, ChevronRight, History, Sparkles, MessageSquare, AlertCircle } from 'lucide-react';
+import type { AIDiagnostic } from '../lib/aiClient';
+import { formatAIDiagnostic } from '../lib/aiDiagnosticMessage';
+import { PenTool, CheckCircle, ChevronRight, History, Sparkles, MessageSquare, AlertCircle, X } from 'lucide-react';
 
 export const WritingPage: React.FC = () => {
   const { user, isMock } = useAuth();
@@ -20,6 +22,9 @@ export const WritingPage: React.FC = () => {
   const [content, setContent] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState(false);
+  // G3 (diagnosis 2026-06-05): surface why AI feedback fell back to the mock
+  // analyzer instead of failing silently.
+  const [aiDiagnostic, setAiDiagnostic] = useState<AIDiagnostic | null>(null);
   
   // Results & History
   const [currentFeedback, setCurrentFeedback] = useState<WritingSubmission | null>(null);
@@ -54,8 +59,12 @@ export const WritingPage: React.FC = () => {
     try {
       setSubmitting(true);
       setSubmitError(false);
+      setAiDiagnostic(null);
       const promptTitle = locale === 'en' ? selectedPrompt.title_en : selectedPrompt.title_vi;
-      const submission = await submitWritingContent(user.id, promptTitle, content, isMock, aiConfig);
+      const submission = await submitWritingContent(
+        user.id, promptTitle, content, isMock, aiConfig,
+        (d) => setAiDiagnostic(d),
+      );
       setCurrentFeedback(submission);
       
       // Add to list history
@@ -200,6 +209,33 @@ export const WritingPage: React.FC = () => {
                 </span>
                 <button type="button" className="btn btn-outline btn-xs" onClick={() => handleSubmit({ preventDefault: () => {} } as React.FormEvent)} disabled={submitting}>
                   {t('common.tryAgain')}
+                </button>
+              </div>
+            )}
+            {/* G3 (diagnosis 2026-06-05): AI feedback fallback diagnostic. */}
+            {aiDiagnostic && (
+              <div
+                className="flex align-center gap-xs"
+                role="status"
+                style={{
+                  background: 'var(--warning-subtle, #fff7ed)',
+                  color: 'var(--warning-text, #9a3412)',
+                  border: '1px solid var(--warning, #fdba74)',
+                  borderRadius: 'var(--radius-md, 8px)',
+                  padding: '8px 12px',
+                  marginTop: 'var(--spacing-sm)',
+                  fontSize: '13px',
+                }}
+              >
+                <AlertCircle size={16} style={{ flexShrink: 0 }} />
+                <span style={{ flex: 1 }}>{formatAIDiagnostic(aiDiagnostic, isEn)}</span>
+                <button
+                  type="button"
+                  onClick={() => setAiDiagnostic(null)}
+                  aria-label={isEn ? 'Dismiss' : 'Đóng'}
+                  style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', flexShrink: 0 }}
+                >
+                  <X size={14} />
                 </button>
               </div>
             )}

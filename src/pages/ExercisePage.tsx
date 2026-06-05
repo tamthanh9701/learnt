@@ -5,6 +5,8 @@ import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { fetchExercisesForTopic, recordExerciseCompletion } from '../lib/exerciseService';
 import type { ExerciseQuestion } from '../lib/exerciseService';
+import type { AIDiagnostic } from '../lib/aiClient';
+import { formatAIDiagnostic } from '../lib/aiDiagnosticMessage';
 import { ChevronLeft, Check, X, AlertCircle, HelpCircle, Award, RefreshCw, ArrowRight } from 'lucide-react';
 
 export const ExercisePage: React.FC = () => {
@@ -20,6 +22,9 @@ export const ExercisePage: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
+  // G3 (diagnosis 2026-06-05): surface why exercises fell back to seed/mock
+  // (e.g. quota exhausted) instead of silently swapping in generic content.
+  const [aiDiagnostic, setAiDiagnostic] = useState<AIDiagnostic | null>(null);
 
   // Interaction State
   const [selectedOption, setSelectedOption] = useState<string | null>(null); // MCQ
@@ -38,7 +43,8 @@ export const ExercisePage: React.FC = () => {
     try {
       setLoading(true);
       setLoadError(false);
-      const data = await fetchExercisesForTopic(topicId, isMock, aiConfig);
+      setAiDiagnostic(null);
+      const data = await fetchExercisesForTopic(topicId, isMock, aiConfig, (d) => setAiDiagnostic(d));
       setQuestions(data);
       setCurrentIndex(0);
       setCorrectAnswersCount(0);
@@ -222,6 +228,35 @@ export const ExercisePage: React.FC = () => {
           style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
         />
       </div>
+
+      {/* G3 (diagnosis 2026-06-05): AI fallback diagnostic banner — tells the
+          Learner why these exercises are basic/seed instead of AI-generated. */}
+      {aiDiagnostic && (
+        <div
+          className="flex align-center gap-xs"
+          role="status"
+          style={{
+            background: 'var(--warning-subtle, #fff7ed)',
+            color: 'var(--warning-text, #9a3412)',
+            border: '1px solid var(--warning, #fdba74)',
+            borderRadius: 'var(--radius-md, 8px)',
+            padding: '8px 12px',
+            marginBottom: 'var(--spacing-lg)',
+            fontSize: '13px',
+          }}
+        >
+          <AlertCircle size={16} style={{ flexShrink: 0 }} />
+          <span style={{ flex: 1 }}>{formatAIDiagnostic(aiDiagnostic, isEn)}</span>
+          <button
+            type="button"
+            onClick={() => setAiDiagnostic(null)}
+            aria-label={isEn ? 'Dismiss' : 'Đóng'}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', flexShrink: 0 }}
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* Main card */}
       <div className="card exercise-card">

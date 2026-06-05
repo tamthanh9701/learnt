@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { PROVIDER_LABELS } from '../lib/aiClient';
+import type { AIDiagnostic } from '../lib/aiClient';
+import { formatAIDiagnostic } from '../lib/aiDiagnosticMessage';
 import { fetchAIConversationResponse, fetchSpeakingSessionsHistory } from '../lib/speakingService';
 import type { ChatMessage } from '../lib/speakingService';
 import { isCompleteFeedback } from '../lib/aiFeedback';
@@ -30,6 +32,11 @@ export const ConversationPage: React.FC = () => {
   // Speech + error states
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [replyError, setReplyError] = useState(false);
+  // G3 (diagnosis 2026-06-05): when the configured AI provider can't be used,
+  // the service falls back to a mock reply but now reports WHY via onDiagnostic.
+  // We surface that reason as a dismissible banner so the Learner understands
+  // they're seeing a basic response (e.g. quota exhausted -> switch model).
+  const [aiDiagnostic, setAiDiagnostic] = useState<AIDiagnostic | null>(null);
   // Per-turn feedback-card expansion, keyed by message index (US-SPEAK-04 / BR-13).
   // Toggling one turn never affects another; ephemeral (resets on reload).
   const [expandedFeedback, setExpandedFeedback] = useState<Set<number>>(new Set());
@@ -94,6 +101,7 @@ export const ConversationPage: React.FC = () => {
     setInputText('');
     setSpeechError(null);
     setReplyError(false);
+    setAiDiagnostic(null);
 
     const now = new Date().toISOString();
     const newMsg: ChatMessage = {
@@ -107,7 +115,10 @@ export const ConversationPage: React.FC = () => {
     setSubmitting(true);
 
     try {
-      const aiReply = await fetchAIConversationResponse(user.id, topic, updatedHistory, isMock, aiConfig);
+      const aiReply = await fetchAIConversationResponse(
+        user.id, topic, updatedHistory, isMock, aiConfig,
+        (d) => setAiDiagnostic(d),
+      );
       
       setMessages(prev => [
         ...prev,
@@ -127,9 +138,13 @@ export const ConversationPage: React.FC = () => {
   const handleRetryReply = async () => {
     if (!user || submitting || messages.length === 0) return;
     setReplyError(false);
+    setAiDiagnostic(null);
     setSubmitting(true);
     try {
-      const aiReply = await fetchAIConversationResponse(user.id, topic, messages, isMock, aiConfig);
+      const aiReply = await fetchAIConversationResponse(
+        user.id, topic, messages, isMock, aiConfig,
+        (d) => setAiDiagnostic(d),
+      );
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: aiReply, timestamp: new Date().toISOString() }
@@ -347,6 +362,35 @@ export const ConversationPage: React.FC = () => {
               <span>{isEn ? 'Restart' : 'Làm mới'}</span>
             </button>
           </div>
+
+          {/* G3 (diagnosis 2026-06-05): AI fallback diagnostic banner. Tells the
+              Learner why they're seeing a basic response (e.g. quota exhausted)
+              instead of silently degrading to mock. Dismissible. */}
+          {aiDiagnostic && (
+            <div
+              className="flex align-center gap-xs"
+              role="status"
+              style={{
+                background: 'var(--warning-subtle, #fff7ed)',
+                color: 'var(--warning-text, #9a3412)',
+                border: '1px solid var(--warning, #fdba74)',
+                borderRadius: 'var(--radius-md, 8px)',
+                padding: '8px 12px',
+                margin: '0 0 12px',
+                fontSize: '13px',
+              }}
+            >
+              <AlertCircle size={16} style={{ flexShrink: 0 }} />
+              <span style={{ flex: 1 }}>{formatAIDiagnostic(aiDiagnostic, isEn)}</span>
+              <button
+                onClick={() => setAiDiagnostic(null)}
+                aria-label={isEn ? 'Dismiss' : 'Đóng'}
+                style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'inherit', flexShrink: 0 }}
+              >
+                <X size={14} />
+              </button>
+            </div>
+          )}
 
           {/* Messages log */}
           <div className="chat-messages-area flex flex-col gap-md">

@@ -1,6 +1,6 @@
 import { supabase } from './supabase';
-import { callAIProvider } from './aiClient';
-import type { AIConfig } from './aiClient';
+import { callAIProvider, classifyAIError } from './aiClient';
+import type { AIConfig, AIDiagnosticHandler } from './aiClient';
 import type { ChatMessage as AIChatMessage } from './aiClient';
 import { parseStructuredReply } from './aiFeedback';
 import type { StructuredFeedback } from './aiFeedback';
@@ -147,7 +147,8 @@ export const fetchAIConversationResponse = async (
   topic: string,
   history: ChatMessage[],
   isMock: boolean,
-  aiConfig?: AIConfig
+  aiConfig?: AIConfig,
+  onDiagnostic?: AIDiagnosticHandler
 ): Promise<string> => {
   const now = new Date().toISOString();
   let response = '';
@@ -202,7 +203,12 @@ Rules:
       feedback = parsed.feedback;
       responseGenerated = true;
     } catch (err) {
+      // G3 (diagnosis 2026-06-05): surface WHY the AI didn't run instead of
+      // swallowing it. The flow still falls back to the mock below (graceful
+      // degradation), but the UI can now tell the learner (e.g. quota
+      // exhausted -> switch model). Previously this was a silent console.warn.
       console.warn('AI provider call failed, falling back:', err);
+      onDiagnostic?.(classifyAIError(err));
     }
   }
 
@@ -217,6 +223,15 @@ Rules:
       responseGenerated = true;
     } catch (err) {
       console.warn('ai-conversation Edge function failed/not deployed, falling back:', err);
+      // G3/G4: this branch's diagnostic only fires when the provider is
+      // unconfigured (a configured-but-failed provider already reported its
+      // own reason above). So the actionable signal here is "set up AI".
+      if (!aiConfig || aiConfig.provider === 'none' || !aiConfig.apiKey || !aiConfig.model) {
+        onDiagnostic?.({
+          reason: 'not_configured',
+          message: 'No AI provider configured and the AI service is unavailable.',
+        });
+      }
     }
   }
 
