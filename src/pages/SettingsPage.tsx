@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
-import { PROVIDER_MODELS, PROVIDER_LABELS, testAIConnection } from '../lib/aiClient';
+import { PROVIDER_MODELS, PROVIDER_LABELS, testAIConnection, probeGeminiModels } from '../lib/aiClient';
 import { QuotaExhaustedError, RateLimitError, AuthError } from '../lib/aiClient';
 import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
 import { useFormDirtyReact } from '../hooks/useFormDirty';
@@ -205,17 +205,67 @@ export const SettingsPage: React.FC = () => {
       // an exhausted cached model see "try X instead" instead of a wall of
       // JSON. AuthError / RateLimitError get clear single-line messages.
       if (err instanceof QuotaExhaustedError) {
-        const working = PROVIDER_MODELS.gemini
-          .map(m => m.value)
-          .filter(v => v !== err.model)
-          .slice(0, 3)
-          .join(', ');
+        // H6 (diagnosis 2026-06-05): the previous F1 hint sliced the first 3
+        // models in PROVIDER_MODELS.gemini and showed them as suggestions,
+        // but it never verified those models actually had remaining quota.
+        // With the user's real API key, 2 of the 3 suggested models were
+        // ALSO exhausted, so the hint misled the user into trying more
+        // broken models ("Vẫn không kết nối được").
+        //
+        // New flow: probe the other 4 models in parallel via
+        // `probeGeminiModels`, then show ONLY the ones that returned 200.
+        // If the probe finds nothing working, show a generic fallback
+        // message instead of a misleading list.
+        //
+        // We render an interim "checking…" message so the user knows
+        // something is happening (probe takes ~1-3 s on a fast net).
         setAiTestResult({
           success: false,
           message: isEn
-            ? `Model "${err.model}" is quota-exhausted (free tier limit reached). Try one of these: ${working}.`
-            : `Mô hình "${err.model}" đã hết hạn ngạch. Hãy thử một trong: ${working}.`,
+            ? `Model "${err.model}" is quota-exhausted. Checking other models…`
+            : `Mô hình "${err.model}" đã hết hạn ngạch. Đang kiểm tra các mô hình khác…`,
         });
+        // We re-use aiTesting=true to keep the Test button disabled while
+        // the probe runs (a second click during the probe would race
+        // against the in-flight probe). The outer `finally` resets it.
+        setAiTesting(true);
+        try {
+          const candidates = PROVIDER_MODELS.gemini
+            .map(m => m.value)
+            .filter(v => v !== err.model);
+          const probes = await probeGeminiModels(aiApiKey, candidates);
+          const working = probes.filter(p => p.ok).map(p => p.model);
+          if (working.length > 0) {
+            setAiTestResult({
+              success: false,
+              message: isEn
+                ? `Model "${err.model}" is quota-exhausted. These models are still working: ${working.join(', ')}.`
+                : `Mô hình "${err.model}" đã hết hạn ngạch. Các mô hình còn hoạt động: ${working.join(', ')}.`,
+            });
+          } else {
+            // No other model works. Most likely: the API key is
+            // exhausted across the board, or the key is bad. Generic
+            // message (H6 plan C) so the user doesn't loop trying the
+            // (also-exhausted) list. See runbook §8.
+            setAiTestResult({
+              success: false,
+              message: isEn
+                ? `Model "${err.model}" is quota-exhausted, and no other Gemini model in the dropdown works with this API key. Wait a few minutes and try again, or create a new API key.`
+                : `Mô hình "${err.model}" đã hết hạn ngạch và không có mô hình Gemini nào khác trong danh sách hoạt động với khoá API này. Vui lòng đợi vài phút rồi thử lại, hoặc tạo khoá API mới.`,
+            });
+          }
+        } catch {
+          // probeGeminiModels is contractually non-throwing, but defend
+          // in depth: if it does throw (e.g. a future refactor regresses),
+          // show a generic message rather than letting the original
+          // QuotaExhaustedError message overwrite the interim state.
+          setAiTestResult({
+            success: false,
+            message: isEn
+              ? `Model "${err.model}" is quota-exhausted. Try another model in the dropdown (we couldn't auto-check the others).`
+              : `Mô hình "${err.model}" đã hết hạn ngạch. Hãy thử mô hình khác trong danh sách (không thể tự động kiểm tra).`,
+          });
+        }
       } else if (err instanceof RateLimitError) {
         setAiTestResult({
           success: false,

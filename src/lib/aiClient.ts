@@ -435,6 +435,109 @@ export async function testAIConnection(config: AIConfig): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Model probe (H6 fix)
+// ---------------------------------------------------------------------------
+
+/**
+ * Per-model probe result. Returned by `probeGeminiModels` so the UI can
+ * render an actionable model-swap hint with only the models that actually
+ * have remaining quota.
+ *
+ *   - `ok: true,  reason: 'working'` — the model returned 200 OK
+ *   - `ok: false, reason: 'quota'`   — 429 RESOURCE_EXHAUSTED
+ *   - `ok: false, reason: 'auth'`    — 401/403 (likely the key is bad for
+ *                                       ALL models — see runbook §8)
+ *   - `ok: false, reason: 'rate_limit'` — 429 with non-quota limit hit
+ *   - `ok: false, reason: 'error'`   — anything else (network, timeout,
+ *                                       unknown shape); `detail` carries
+ *                                       the truncated message for logs
+ */
+export interface ProbeResult {
+  model: string;
+  ok: boolean;
+  reason: 'working' | 'quota' | 'auth' | 'rate_limit' | 'error';
+  detail?: string;
+}
+
+/**
+ * Probe multiple Gemini models in parallel to discover which ones are
+ * quota-exhausted / auth-failed / working. Used by SettingsPage's Test
+ * connection flow when the initial model returns QuotaExhaustedError
+ * (H6, diagnosis 2026-06-05).
+ *
+ * Why this exists:
+ *   The earlier F1 model-swap hint (SettingsPage.tsx) sliced the first 3
+ *   models in PROVIDER_MODELS.gemini and showed them as suggestions, but
+ *   it never checked if those models actually had remaining quota. With
+ *   the user's real API key, 2 of the 3 suggested models were ALSO
+ *   exhausted, so the hint misled the user into trying more broken
+ *   models ("Vẫn không kết nối được" — diagnosis 2026-06-05).
+ *
+ * Behavior contract:
+ *   - Sends ALL probes in parallel (no serial round-trips). Each probe
+ *     uses a 10 s timeout — faster than the full 30 s we use for real
+ *     calls, because we only need a yes/no.
+ *   - NEVER throws. Every error path returns a ProbeResult with
+ *     `ok: false` and an appropriate reason. The UI depends on this:
+ *     if probeGeminiModels threw, the outer SettingsPage catch would have
+ *     to deal with the probe error AS WELL AS the original QuotaExhaustedError.
+ *   - Returns results in the SAME ORDER as the input model list. The UI
+ *     uses this to map results back to PROVIDER_MODELS.gemini entries.
+ */
+export async function probeGeminiModels(
+  apiKey: string,
+  models: string[],
+  perModelTimeoutMs: number = 10_000,
+): Promise<ProbeResult[]> {
+  if (models.length === 0) return [];
+
+  const probes = models.map(async (model): Promise<ProbeResult> => {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+    try {
+      const res = await guardedFetchGemini(
+        model,
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': apiKey,
+          },
+          // Minimal payload — we just need a yes/no. maxOutputTokens=4 keeps
+          // the response tiny and the round-trip fast. The model can reply
+          // with anything; we don't even read the body.
+          body: JSON.stringify({
+            contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+            generationConfig: { temperature: 0, maxOutputTokens: 4 },
+          }),
+        },
+        perModelTimeoutMs,
+      );
+      void res; // success — we don't need the body
+      return { model, ok: true, reason: 'working' };
+    } catch (err: unknown) {
+      if (err instanceof QuotaExhaustedError) {
+        return { model, ok: false, reason: 'quota' };
+      }
+      if (err instanceof AuthError) {
+        return { model, ok: false, reason: 'auth' };
+      }
+      if (err instanceof RateLimitError) {
+        return { model, ok: false, reason: 'rate_limit' };
+      }
+      // Defensive: any other error (network, timeout, TypeError from
+      // fetch, etc.) surfaces as reason:'error' with a short detail.
+      // This is what keeps the UI renderable even when the probe
+      // network itself is broken.
+      const msg = err instanceof Error ? err.message : String(err);
+      return { model, ok: false, reason: 'error', detail: msg.slice(0, 200) };
+    }
+  });
+
+  return Promise.all(probes);
+}
+
+// ---------------------------------------------------------------------------
 // Model lists per provider (for Settings UI)
 // ---------------------------------------------------------------------------
 
