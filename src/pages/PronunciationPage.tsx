@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -111,8 +111,11 @@ export const PronunciationPage: React.FC = () => {
   }, []);
 
   const [activeIdx, setActiveIdx] = useState<number>(0);
-  const activeIdxRef = useRef<number>(0);
-  activeIdxRef.current = activeIdx;
+  // CH7-fix (2026-06-07, P1-#6): removed activeIdxRef (was a stale-
+  // closure escape hatch in handleNext). Now handleNext includes
+  // activeIdx in its deps so the closure reads the freshest value
+  // directly - no ref needed, no render-body writes (which the
+  // React docs warn against).
 
   const useFallback = pool.length === 0;
   const activeSentence = useFallback
@@ -137,11 +140,11 @@ export const PronunciationPage: React.FC = () => {
       setActiveIdx((prev) => (prev + 1) % FALLBACK_CHALLENGES.length);
       return;
     }
-    // BR-19: no immediate repeat. Read current from ref so the pickNext
-    // call never sees stale state, then update state from the chosen value.
-    const next = pickNext(pool, activeIdxRef.current);
+    // BR-19: no immediate repeat. activeIdx is now in deps so the
+    // closure captures the freshest value; no ref needed.
+    const next = pickNext(pool, activeIdx);
     setActiveIdx(next);
-  }, [pool, useFallback]);
+  }, [pool, useFallback, activeIdx]);
 
   // --- Scoring state ---
   // CH2 (diagnosis 2026-06-06, fix-2): removed the on-device ASR
