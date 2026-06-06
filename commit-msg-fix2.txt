@@ -1,0 +1,69 @@
+refactor(pronunciation): remove dead on-device ASR engine load (CH2)
+
+The PronunciationPage was loading @huggingface/transformers
+(~550 kB JS + 23.5 MB ONNX WASM) and a whisper-tiny.en ASR pipeline
+(~40 MB model) on first use, but NEVER ACTUALLY USING THE PIPELINE.
+The finalizeAttempt() function called ensureEngine(), stored the
+pipeline in a ref, and then immediately fell through to the same
+pure alignAndBand() that the "fallback path" used. Both code
+branches produced byte-identical output because the only thing
+the engine path did was download the model and forget it.
+
+The user-visible cost was paid by every Learner on their first
+visit to /speaking/pronunciation:
+  - 24.05 MB of assets the browser downloaded and never used
+  - A "Downloading pronunciation engine..." / "Preparing engine..."
+    spinner that ran even when the model would be discarded
+  - On networks where HuggingFace CDN is blocked (Vietnam, China,
+    many corporate firewalls) the page errored with
+    "Engine unavailable - using word-match fallback" -- which was
+    a lie, because word-match was the ONLY path that worked.
+  - On the Word Score branch the page showed a simpler UI that
+    lacked the per-phoneme color-coded report.
+
+Fix:
+  - phonemeScorer.ts: removed loadPhonemeEngine(), transcribe(),
+    PhonemeEngineState, AsrPipeline, and the dynamic
+    import('@huggingface/transformers'). Kept PHONEME_MODEL_ID
+    as a docstring-style constant and the pure helpers
+    (alignAndBand, buildAttempt, tokenizeWords, levenshteinRatio,
+    overallBand).
+  - PronunciationPage.tsx: removed engineState/engineRef/
+    ensureEngine, the engine-loading UI banner, the
+    scorePronunciationSimilarity import, and the word-score
+    fallback branch. Simplified finalizeAttempt() to a single
+    alignAndBand() call. Added a "Try Again" button to the
+    per-phoneme report (was previously only in the word-score
+    branch, so the per-phoneme path had no retry option).
+  - package.json: removed @huggingface/transformers dependency
+    so npm install no longer fetches it.
+
+Test coverage (TC-PHONEME-API-01..02, TC-PHONEME-ALIGN-01..03,
+TC-PHONEME-BUILD-01, TC-PHONEME-NO-IMPRT-01):
+  - public API still exports the pure scoring helpers
+  - loadPhonemeEngine and transcribe are GONE from the public API
+  - alignAndBand produces the same bands/scores as before for
+    perfect, partial, and empty inputs
+  - buildAttempt produces a valid PronunciationAttempt
+  - PronunciationPage.tsx no longer contains the string
+    "@huggingface/transformers" or "loadPhonemeEngine" (regression
+    guard against re-introducing the dead path)
+
+Tests: 135 passed, 1 skipped (TODO_S4 known-bugs baseline) - no
+regressions, +7 new tests. Build clean.
+
+Bundle impact:
+  - BEFORE: 625 kB main + 551 kB transformers.web + 23.5 MB
+    ort-wasm-simd-threaded.asyncify.wasm
+  - AFTER:  621 kB main only (-24.05 MB of assets)
+
+Learner experience impact:
+  - Pronunciation Drill loads in <500 ms instead of waiting for
+    24 MB of model assets (or failing outright behind firewalls)
+  - "Engine unavailable - using word-match fallback" message
+    GONE (the only path that worked is now the only path)
+  - Per-phoneme report always shown (more detail, with retry
+    button added)
+
+Refs: CONTEXT.md pronunciationDrill; diagnosis-2026-06-06 CH2;
+package.json dependencies; phonemeScorer.ts header.

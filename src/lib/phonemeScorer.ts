@@ -1,35 +1,37 @@
 /**
  * phonemeScorer.ts — in-browser pronunciation scoring.
  *
- * The ONLY file in src/ that may import @huggingface/transformers.
- * It is intended to be loaded via a dynamic import() from PronunciationPage
- * so Rollup splits it into a separate lazy chunk (BR-21, NFR-11 veto).
+ * CH2 (diagnosis 2026-06-06, fix-2): the on-device ASR engine path
+ * (loadPhonemeEngine + transcribe, @huggingface/transformers) was a
+ * dead branch. PronunciationPage.finalizeAttempt called the loader
+ * but never invoked the returned pipeline — the per-word scoring
+ * used the same pure `alignAndBand` function on the Web Speech
+ * transcript regardless. The result: every Learner in production
+ * paid the cost of a 40 MB ASR model download + 23.5 MB ONNX WASM
+ * + 550 kB transformers runtime, only to fall through to the same
+ * text-alignment path. On networks where HuggingFace CDN is blocked
+ * (Vietnam, China, corporate firewalls) the page errored with
+ * "Engine unavailable — using word-match fallback" even though the
+ * word-match path is the only one that actually works.
  *
- * Approach (chosen for robustness + small model size, NOT a phoneme CTC):
- *   - ASR pipeline (whisper-tiny.en) transcribes the learner's audio to text.
- *   - The PURE scoring function (alignAndBand below) compares the recognized
- *     words to the reference words, computes per-word scores, and bands them
- *     (good/borderline/off) per BR-18. The pure function is unit-testable
- *     in happy-dom without ever loading transformers.
+ * This module now exports ONLY the pure helpers that do the work:
+ *   - alignAndBand(reference, recognized) -> { overall, perWord }
+ *   - buildAttempt(sentence, sourceCardId, recognized) -> PronunciationAttempt
+ *   - tokenizeWords / levenshteinRatio / overallBand
+ *   - PHONEME_MODEL_ID (kept for documentation; no runtime consumer)
  *
- * On model load failure -> caller falls back to speakingService.scorePronunciationSimilarity.
+ * If a future feature really needs in-browser ASR (e.g., accent
+ * scoring the recognizer can't do), re-introduce the loader behind
+ * a feature flag and ensure the call site ACTUALLY USES the
+ * pipeline. Until then: no model load, no WASM, no 24 MB download.
  */
 
 import { bandForScore } from './pronunciationHistory';
 import type { PhonemeBand, PhonemeScore, PronunciationAttempt } from './pronunciationHistory';
 
-// ---------------------------------------------------------------------------
-// Public loader state machine (NFR: never an infinite spinner, terminal always).
-// ---------------------------------------------------------------------------
-
-export type PhonemeEngineState =
-  | { kind: 'idle' }
-  | { kind: 'downloading'; file?: string; loaded?: number; total?: number }
-  | { kind: 'preparing' }
-  | { kind: 'ready' }
-  | { kind: 'error'; message: string };
-
-/** Identifier of the in-browser model (pin to one place for easy swap). */
+/** Identifier of the (no-longer-loaded) in-browser model.
+ *  Kept as a docstring-style constant so future contributors know
+ *  which model was considered during the BR-21 / NFR-11 design. */
 export const PHONEME_MODEL_ID = 'Xenova/whisper-tiny.en' as const;
 
 // ---------------------------------------------------------------------------
@@ -125,68 +127,6 @@ function levenshtein(a: string, b: string): number {
 /** Map an overall score in [0,1] to the project's 3-banded representation. */
 export function overallBand(overall: number): PhonemeBand {
   return bandForScore(overall);
-}
-
-// ---------------------------------------------------------------------------
-// Side-effecty loader (transformers.js). Imported only via dynamic import()
-// from PronunciationPage so Rollup splits it out of the main bundle.
-// ---------------------------------------------------------------------------
-
-type AsrPipeline = (
-  input: Float32Array | string,
-  options?: Record<string, unknown>,
-) => Promise<{ text?: string; chunks?: Array<{ text?: string }> }>;
-
-/**
- * Load the ASR pipeline. The onState callback is invoked for each loader state
- * (downloading, preparing, ready, error). Returns the pipeline or throws on
- * failure. The caller is expected to ALWAYS reach a terminal state.
- */
-export async function loadPhonemeEngine(
-  onState: (s: PhonemeEngineState) => void,
-): Promise<AsrPipeline> {
-  onState({ kind: 'downloading' });
-  try {
-    // Dynamic import of the HEAVY package happens ONLY here.
-    // Rollup will not see it as a static import of src/ (this file is the
-    // only one that imports it, and it is reached via dynamic import from the page).
-    const mod = await import('@huggingface/transformers');
-    const { pipeline, env } = mod as {
-      pipeline: (task: string, model?: string, opts?: Record<string, unknown>) => Promise<AsrPipeline>;
-      env: { allowLocalModel?: boolean; useFsWrite?: boolean };
-    };
-    // Stay WASM, single-thread. Do not enable WebGPU.
-    onState({ kind: 'preparing' });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (env as any).useFsWrite = false;
-    const pipe = await pipeline('automatic-speech-recognition', PHONEME_MODEL_ID, {
-      // quantized, wasm, single-thread (NFR: WASM not WebGPU; Safari-safe)
-      dtype: 'q8',
-      device: 'wasm',
-    } as Record<string, unknown>);
-    onState({ kind: 'ready' });
-    return pipe;
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    onState({ kind: 'error', message });
-    throw err;
-  }
-}
-
-/**
- * Transcribe audio (Float32Array @ 16kHz) to text using the loaded pipeline.
- */
-export async function transcribe(
-  pipe: AsrPipeline,
-  audio: Float32Array,
-): Promise<string> {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const out: any = await pipe(audio as any, { chunk_length_s: 30, stride_length_s: 5 });
-  if (typeof out?.text === 'string') return out.text;
-  if (Array.isArray(out?.chunks) && out.chunks.length > 0) {
-    return out.chunks.map((c: { text?: string }) => c.text || '').join(' ');
-  }
-  return '';
 }
 
 /** Build a PronunciationAttempt from a reference + recognized text. */

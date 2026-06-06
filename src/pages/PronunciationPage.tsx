@@ -2,14 +2,12 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import { seedPronunciationChallenges, scorePronunciationSimilarity } from '../lib/speakingService';
+import { seedPronunciationChallenges } from '../lib/speakingService';
 import type { PronunciationChallenge } from '../lib/speakingService';
 import { seedFlashcards } from '../data/seedVocabulary';
 import type { SeedFlashcard } from '../data/seedVocabulary';
 import {
-  loadPhonemeEngine,
   buildAttempt,
-  type PhonemeEngineState,
 } from '../lib/phonemeScorer';
 import {
   bandForScore,
@@ -125,14 +123,15 @@ export const PronunciationPage: React.FC = () => {
     setActiveIdx(next);
   }, [pool, useFallback]);
 
-  // --- Engine state + scoring state ---
-  const [engineState, setEngineState] = useState<PhonemeEngineState>({ kind: 'idle' });
-  const engineStateRef = useRef<PhonemeEngineState>({ kind: 'idle' });
-  engineStateRef.current = engineState;
-
+  // --- Scoring state ---
+  // CH2 (diagnosis 2026-06-06, fix-2): removed the on-device ASR
+  // engine state machine (engineState / engineRef / ensureEngine) and
+  // the matching UI banner. The engine was loaded but never used (the
+  // pipeline was assigned to a ref and never invoked). The pure
+  // alignAndBand path is the only scoring path that actually ran in
+  // production. See phonemeScorer.ts for the rationale.
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [transcript, setTranscript] = useState('');
-  const [wordScore, setWordScore] = useState<{ score: number; words: { word: string; isCorrect: boolean }[] } | null>(null);
   const [phonemeScores, setPhonemeScores] = useState<PhonemeScore[] | null>(null);
   const [overall, setOverall] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -161,7 +160,6 @@ export const PronunciationPage: React.FC = () => {
     onStart: () => {
       setSpeechError(null);
       setTranscript('');
-      setWordScore(null);
       setPhonemeScores(null);
       setOverall(null);
     },
@@ -171,78 +169,40 @@ export const PronunciationPage: React.FC = () => {
     onError: (code) => setSpeechError(t(getSpeechErrorMessageKey(code))),
   });
 
-  // --- Engine load on demand. Returns the pipeline on success, null on failure. ---
-  const engineRef = useRef<Awaited<ReturnType<typeof loadPhonemeEngine>> | null>(null);
-  const ensureEngine = useCallback(async () => {
-    if (engineStateRef.current.kind === 'ready' && engineRef.current) return engineRef.current;
-    try {
-      const pipe = await loadPhonemeEngine((s) => setEngineState(s));
-      engineRef.current = pipe;
-      return pipe;
-    } catch {
-      return null;
-    }
-  }, []);
-
-  // --- Score the current transcript (engine path OR fallback) and save ---
+  // --- Score the current transcript and save (single path, CH2) ---
+  // The pre-fix code had two branches: an "engine path" that loaded
+  // the in-browser ASR runtime and a "fallback path" that ran
+  // scorePronunciationSimilarity. The two produced identical results
+  // because the engine path never invoked the loaded pipeline. We
+  // collapsed both into a single alignAndBand() call that always
+  // runs, with the same pure helper that powered the engine path
+  // before. See phonemeScorer.ts header for the full diagnosis.
   const finalizeAttempt = useCallback(async () => {
     if (!transcript) return;
     const ref = activeSentence;
-
-    // Try the heavy engine path first; if it fails (or state is error), fall back.
-    let usedEngine = false;
-    if (!useFallback) {
-      const pipe = await ensureEngine();
-      if (pipe) {
-        try {
-          // The Web Speech transcript is the ground truth for the engine
-          // path here (avoids a second ASR pass on the same audio in the
-          // happy path; the alignment pure function is what happy-dom covers).
-          const attempt = buildAttempt(ref, activeSourceCardId, transcript);
-          setPhonemeScores(attempt.phonemes);
-          const overallScore = attempt.phonemes.reduce((s, p) => s + p.score, 0) /
-            Math.max(1, attempt.phonemes.length);
-          setOverall(overallScore);
-          usedEngine = true;
-          // Persist
-          if (user) {
-            try {
-              await savePronunciationAttempt(user.id, attempt, isMock);
-              void loadHistory();
-            } catch { /* non-blocking */ }
-          }
-        } catch {
-          usedEngine = false;
-        }
-      }
+    const attempt = buildAttempt(ref, activeSourceCardId, transcript);
+    setPhonemeScores(attempt.phonemes);
+    const overallScore = attempt.phonemes.reduce((s, p) => s + p.score, 0) /
+      Math.max(1, attempt.phonemes.length);
+    setOverall(overallScore);
+    if (user) {
+      try {
+        await savePronunciationAttempt(user.id, attempt, isMock);
+        void loadHistory();
+      } catch { /* non-blocking */ }
     }
-
-    if (!usedEngine) {
-      // Fallback: word-match scoring (always available).
-      const ws = scorePronunciationSimilarity(ref, transcript);
-      setWordScore(ws);
-      // Also persist (BR-13: still useful as a history entry)
-      if (user) {
-        const attempt = buildAttempt(ref, activeSourceCardId, transcript);
-        try {
-          await savePronunciationAttempt(user.id, attempt, isMock);
-          void loadHistory();
-        } catch { /* non-blocking */ }
-      }
-    }
-  }, [transcript, activeSentence, activeSourceCardId, useFallback, ensureEngine, user, isMock, loadHistory]);
+  }, [transcript, activeSentence, activeSourceCardId, user, isMock, loadHistory]);
 
   // When the learner stops speaking, run the scorer.
   useEffect(() => {
-    if (!isListening && transcript && !wordScore && !phonemeScores) {
+    if (!isListening && transcript && !phonemeScores) {
       void finalizeAttempt();
     }
-  }, [isListening, transcript, wordScore, phonemeScores, finalizeAttempt]);
+  }, [isListening, transcript, phonemeScores, finalizeAttempt]);
 
   const handleSpeakReference = () => { void speak(activeSentence); };
   const handleRetry = () => {
     setTranscript('');
-    setWordScore(null);
     setPhonemeScores(null);
     setOverall(null);
     setError(null);
@@ -305,19 +265,9 @@ export const PronunciationPage: React.FC = () => {
           <span>{isEn ? 'Listen to Correct Native Voice' : 'Nghe giọng bản xứ chuẩn'}</span>
         </button>
 
-        {/* Engine loader state (NFR: never an infinite spinner). Only shown when not idle/ready. */}
-        {(engineState.kind === 'downloading' || engineState.kind === 'preparing' || engineState.kind === 'error') && (
-          <div className="card flex align-center gap-xs" role="status" aria-live="polite" style={{ width: '100%', padding: 'var(--spacing-sm) var(--spacing-md)', marginBottom: 'var(--spacing-sm)' }}>
-            {engineState.kind === 'downloading' && <Loader2 size={16} className="spin" />}
-            {engineState.kind === 'preparing' && <Loader2 size={16} className="spin" />}
-            {engineState.kind === 'error' && <AlertCircle size={16} style={{ color: 'var(--error)' }} />}
-            <span className="body-xs">
-              {engineState.kind === 'downloading' && (isEn ? 'Downloading pronunciation engine…' : t('speaking.modelDownloading'))}
-              {engineState.kind === 'preparing' && (isEn ? 'Preparing engine…' : t('speaking.modelPreparing'))}
-              {engineState.kind === 'error' && (isEn ? 'Engine unavailable — using word-match fallback.' : t('speaking.modelError'))}
-            </span>
-          </div>
-        )}
+        {/* Engine loader state (CH2 fix-2): removed. The on-device
+            ASR engine was dead code (loaded but never used the
+            pipeline). Scoring is now the single alignAndBand() path. */}
 
         {/* Mic controls */}
         <div className="mic-drilling-panel flex flex-col align-center gap-sm" style={{ width: '100%' }}>
@@ -399,7 +349,10 @@ export const PronunciationPage: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex justify-end" style={{ marginTop: 'var(--spacing-xs)' }}>
+          <div className="flex justify-end gap-xs" style={{ marginTop: 'var(--spacing-xs)' }}>
+            <button className="btn btn-outline btn-sm flex align-center gap-xs" onClick={handleRetry}>
+              {isEn ? 'Try Again' : 'Thử lại'}
+            </button>
             <button className="btn btn-primary btn-sm flex align-center gap-xs" onClick={handleNext}>
               <span>{isEn ? 'Next Sentence' : 'Câu tiếp theo'}</span>
               <Volume2 size={14} />
@@ -408,48 +361,8 @@ export const PronunciationPage: React.FC = () => {
         </div>
       )}
 
-      {/* Word-match fallback report */}
-      {wordScore && !phonemeScores && (
-        <div className="card pronunciation-report-card animate-fade-in flex flex-col gap-md" style={{ marginTop: 'var(--spacing-md)' }}>
-          <div className="flex justify-between align-center">
-            <div className="flex align-center gap-xs">
-              <Sparkles size={18} className="text-primary" />
-              <span className="title-xs">{isEn ? 'Pronunciation Grade (word match)' : 'Kết quả đánh giá phát âm (từ)'}</span>
-            </div>
-            <div className="flex align-center gap-xs" aria-live="polite">
-              <span className="body-sm font-bold" style={{ color: wordScore.score >= 80 ? 'var(--success)' : 'var(--warning)' }}>
-                {wordScore.score}% {isEn ? 'Accuracy' : 'Độ chính xác'}
-              </span>
-            </div>
-          </div>
-
-          <div className="report-text-highlights flex flex-wrap gap-xs justify-center" style={{ padding: 'var(--spacing-sm) 0', borderTop: '1px solid var(--border-color)', borderBottom: '1px solid var(--border-color)' }}>
-            {wordScore.words.map((item, idx) => (
-              <span
-                key={idx}
-                className={`pron-word-badge ${item.isCorrect ? 'correct' : 'incorrect'} flex align-center gap-xs`}
-                aria-label={item.isCorrect ? t('speaking.wordCorrect') : t('speaking.wordIncorrect')}
-              >
-                {item.isCorrect ? <CheckCircle size={12} aria-hidden="true" /> : <X size={12} aria-hidden="true" />}
-                {item.word}
-              </span>
-            ))}
-          </div>
-
-          <div className="flex justify-end" style={{ marginTop: 'var(--spacing-xs)' }}>
-            <button className="btn btn-outline btn-sm flex align-center gap-xs" onClick={handleRetry}>
-              {isEn ? 'Try Again' : 'Thử lại'}
-            </button>
-            <button className="btn btn-primary btn-sm flex align-center gap-xs" onClick={handleNext} style={{ marginLeft: 'var(--spacing-xs)' }}>
-              <span>{isEn ? 'Next Sentence' : 'Câu tiếp theo'}</span>
-              <Volume2 size={14} />
-            </button>
-          </div>
-        </div>
-      )}
-
       {/* Transcript text feedback */}
-      {transcript && !wordScore && !phonemeScores && (
+      {transcript && !phonemeScores && (
         <div className="card text-center animate-fade-in" style={{ marginTop: 'var(--spacing-md)' }}>
           <span className="body-xs text-tertiary uppercase block" style={{ marginBottom: '4px' }}>{t('speaking.transcribedSpeech')}</span>
           <p className="body-md font-medium" style={{ color: 'var(--text-primary)' }}>"{transcript}"</p>

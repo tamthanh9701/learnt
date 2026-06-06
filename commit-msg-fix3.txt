@@ -1,0 +1,38 @@
+fix(tts): defer speechSynthesis.speak() 50ms to settle cancel() race (CH3)
+
+Symptom: on Pronunciation Drill, sentence 1 native-voice playback
+works, but sentence 2+ is silent when the learner taps the 'Listen
+to Native Voice' button for the next sentence. Same race exists in
+AI Conversation auto-speak after each AI reply.
+
+Root cause: window.speechSynthesis.cancel() schedules a cancel
+asynchronously (per WHATWG spec, the cancel is observed in the next
+event-loop turn). Calling .speak() synchronously right after
+.cancel() queues the new utterance, but the still-pending cancel
+catches it on the next turn and silences it. This is a known race
+on Chrome, Safari, and Firefox; React 18's concurrent mode can make
+it worse by interleaving renders.
+
+Fix: wrap .speak(utterance) in setTimeout(..., 50). The 50ms is
+below the perceptual gap threshold (~100ms) and above the cancel()
+settle time across all supported browsers (per Chromium source,
+~1-2 event-loop turns). Tests pin both the ordering and the
+50ms<=delay<=80ms window as a regression guard.
+
+Test coverage (TC-SYNTH-RACE-01..04):
+  01: baseline cancel+speak ordering on a single call
+  02: back-to-back calls do not race (speak comes after cancel)
+  03: defer delay is bounded [50ms, 80ms]
+  04: missing speechSynthesis -> false (no throw)
+
+Tests: 128 passed, 1 skipped (TODO_S4 known-bugs baseline) - no
+regressions, +4 new tests. Build clean.
+
+Sister fix: TTS via Edge Function (Zephyr) and browser-direct
+tier ('proxy', 'direct' modes) already use AbortController /
+AudioBuffer source.stop() and are NOT affected by this race. The
+race is unique to the speechSynthesis fallback path (TTS mode
+'off' / 'direct'-stub).
+
+Refs: CONTEXT.md speaking-aiConversation / pronunciationDrill;
+diagnosis-2026-06-06 CH3.
