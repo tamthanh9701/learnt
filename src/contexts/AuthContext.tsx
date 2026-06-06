@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { withTimeout } from '../lib/timeout';
 import type { User } from '@supabase/supabase-js';
@@ -28,9 +28,19 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 // Check if we are running in mock mode
-const isSupabaseConfigured = 
-  import.meta.env.VITE_SUPABASE_URL && 
+const isSupabaseConfigured =
+  import.meta.env.VITE_SUPABASE_URL &&
   import.meta.env.VITE_SUPABASE_URL !== 'https://placeholder-project.supabase.co';
+
+// CH7-fix (2026-06-07, P2-#8): derive the mock-mode user ID from the
+// email instead of the previous hard-coded "mock-user-123". Two
+// Learners using demo/offline mode would otherwise share ALL
+// data (Topics progress, Conversations, Pronunciation history,
+// Writing submissions) because every localStorage key is keyed
+// on the user ID. btoa() is a quick stable hash; it's NOT a
+// security boundary (no secret material here, just an email),
+// it just gives a unique per-email ID.
+const mockUserId = (email: string): string => 'mock-' + btoa(email).replace(/[=+/]/g, '');
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
@@ -62,6 +72,76 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   // Sync Supabase Auth state
+  // CH7-fix (2026-06-07, P1-#5): fetchProfile was defined AFTER the
+  // useEffect (further down in the file). TypeScript + React lint
+  // both flagged this as a bug because the closure captured the
+  // wrong binding. Function hoisting saved us at runtime, but the
+  // lint error and the implicit dependency on hoisting was a footgun.
+  //
+  // CH7-fix (P2 bonus): useCallback deps with `user` are unstable
+  // (the user object identity changes on every render), and the
+  // React Compiler flagged `user` vs `user?.email` as a mismatch.
+  // Fix: use a ref to capture the latest email. The callback's
+  // identity is now stable so the useEffect below doesn't refire
+  // on every render.
+  const userEmailRef = useRef<string | undefined>(undefined);
+  useEffect(() => { userEmailRef.current = user?.email; }, [user?.email]);
+
+  const fetchProfile = useCallback(async (userId: string) => {
+    try {
+      const profileRes = await withTimeout(
+        async (signal) => {
+          const res = await supabase
+            .from('profiles')
+            .select('*')
+            .eq('id', userId)
+            .abortSignal(signal)
+            .maybeSingle();
+          return res;
+        },
+        6_000,
+        'AuthContext: fetchProfile',
+      );
+
+      const { data: row, error } = profileRes;
+      // CH7-fix (2026-06-07, P2-#10): pre-fix checked
+      // `error.code === 'PGRST116'` to detect "no row" - but that
+      // error is only thrown by .single(). With .maybeSingle(), the
+      // no-row case is { data: null, error: null }, NOT PGRST116.
+      // Result: the "profile doesn't exist, create one" branch
+      // NEVER fired. New Learners had no profiles row, and the UI
+      // showed empty defaults.
+      if (!row && !error) {
+        const newProfile = {
+          id: userId,
+          display_name: userEmailRef.current?.split('@')[0] || 'Learner',
+          ui_language: 'vi',
+          daily_goal: 20,
+          current_streak: 0,
+          longest_streak: 0,
+        };
+        const insertRes = await withTimeout(
+          async (signal) => {
+            const r = await supabase
+              .from('profiles')
+              .insert(newProfile)
+              .abortSignal(signal);
+            return r;
+          },
+          6_000,
+          'AuthContext: createProfile',
+        );
+        if (!insertRes.error) setProfile(newProfile as UserProfile);
+      } else if (error) {
+        console.error('Error fetching profile:', error);
+      } else if (row) {
+        setProfile(row as unknown as UserProfile);
+      }
+    } catch (err) {
+      console.error('Error in fetchProfile:', err);
+    }
+  }, []);
+
   useEffect(() => {
     if (!isSupabaseConfigured) {
       // Mock mode initialization
@@ -101,7 +181,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       } catch (err) {
         console.error('Error fetching session:', err);
         // Clear stale session that might be causing the hang
-        try { await supabase.auth.signOut(); } catch (_) { /* ignore */ }
+        try { await supabase.auth.signOut(); } catch { /* ignore */ }
       } finally {
         if (!loadingTimedOut) {
           clearTimeout(safetyTimeout);
@@ -130,58 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       clearTimeout(safetyTimeout);
       subscription.unsubscribe();
     };
-  }, []);
-
-  const fetchProfile = async (userId: string) => {
-    try {
-      const profileRes = await withTimeout(
-        async (signal) => {
-          const res = await supabase
-            .from('profiles')
-            .select('*')
-            .eq('id', userId)
-            .abortSignal(signal)
-            .maybeSingle();
-          return res;
-        },
-        6_000,
-        'AuthContext: fetchProfile',
-      );
-
-      const { data: row, error } = profileRes;
-      if (error) {
-        if (error.code === 'PGRST116') {
-          // Profile doesn't exist, create it
-          const newProfile = {
-            id: userId,
-            display_name: user?.email?.split('@')[0] || 'Learner',
-            ui_language: 'vi',
-            daily_goal: 20,
-            current_streak: 0,
-            longest_streak: 0,
-          };
-          const insertRes = await withTimeout(
-            async (signal) => {
-              const r = await supabase
-                .from('profiles')
-                .insert(newProfile)
-                .abortSignal(signal);
-              return r;
-            },
-            6_000,
-            'AuthContext: createProfile',
-          );
-          if (!insertRes.error) setProfile(newProfile as UserProfile);
-        } else {
-          console.error('Error fetching profile:', error);
-        }
-      } else if (row) {
-        setProfile(row as unknown as UserProfile);
-      }
-    } catch (err) {
-      console.error('Error in fetchProfile:', err);
-    }
-  };
+  }, [fetchProfile]);
 
   const refreshProfile = async () => {
     if (user) {
@@ -197,7 +226,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     if (isMock) {
       // Simulate successful login in mock mode
       const mockUser = {
-        id: 'mock-user-123',
+        id: mockUserId(email),
         email,
         aud: 'authenticated',
         role: 'authenticated',
@@ -218,7 +247,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const signUp = async (email: string, password: string, displayName: string) => {
     if (isMock) {
       const mockUser = {
-        id: 'mock-user-123',
+        id: mockUserId(email),
         email,
         aud: 'authenticated',
         role: 'authenticated',
