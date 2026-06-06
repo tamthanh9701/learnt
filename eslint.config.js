@@ -7,7 +7,22 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  globalIgnores([
+    'dist',
+    // Test files are exercised by vitest's own runtime (esbuild at test
+    // time) and by the dedicated tsconfig.test.json (which adds node
+    // types for the require('fs')/import('url') patterns the source-
+    // level tests use). Excluding them from the default app lint
+    // config keeps `npm run lint` green without forcing every test
+    // to jump through `@ts-expect-error` hoops for the legitimate
+    // node-module access.
+    '**/__tests__/**',
+    '**/*.test.ts',
+    '**/*.test.tsx',
+    '**/*.spec.ts',
+    '**/*.spec.tsx',
+    'src/types/speech.d.ts',
+  ]),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [

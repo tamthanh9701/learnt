@@ -5,6 +5,7 @@ import { useAI } from '../contexts/AIContext';
 import { PROVIDER_MODELS, PROVIDER_LABELS, testAIConnection } from '../lib/aiClient';
 import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
 import { Settings, User, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi, Eraser } from 'lucide-react';
+import { withTimeout, TimeoutError } from '../lib/timeout';
 
 const AI_PROVIDERS: { value: AIProviderType; label: string }[] = [
   { value: 'none', label: PROVIDER_LABELS.none },
@@ -32,6 +33,11 @@ export const SettingsPage: React.FC = () => {
   const [aiSaving, setAiSaving] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
   const [aiTesting, setAiTesting] = useState(false);
+  // CH1-fix (2026-06-07): busy state for the Clear button. The pre-fix
+  // code awaited updateConfig with no timeout, so a slow / hung
+  // ai_configs Supabase request could leave the Clear button
+  // "stuck" for 30+ seconds with no feedback to the Learner.
+  const [aiClearing, setAiClearing] = useState(false);
   const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
 
   const isEn = locale === 'en';
@@ -200,18 +206,35 @@ export const SettingsPage: React.FC = () => {
     setShowApiKey(false);
     setAiSaved(false);
     setAiTestResult(null);
-    // Persist the cleared state through AIContext so localStorage +
-    // ai_configs row get wiped too.
+    // CH1-fix (2026-06-07): wrap updateConfig in withTimeout so a
+    // slow / hung Supabase ai_configs request cannot leave the
+    // Clear button in a stuck state. The localStorage cache is
+    // already wiped by the local setAiApiKey('') above, so a
+    // timeout here only means the cloud ai_configs row will be
+    // cleaned up on the next save (acceptable degradation).
+    setAiClearing(true);
     try {
-      await updateConfig({
-        provider: aiProvider,
-        apiKey: '',
-        model: aiModel,
-        ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
-      });
+      await withTimeout(
+        async () => {
+          await updateConfig({
+            provider: aiProvider,
+            apiKey: '',
+            model: aiModel,
+            ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
+          });
+        },
+        8_000,
+        'SettingsPage: clearApiKey',
+      );
     } catch (err) {
-      // Even if cloud sync fails, the local state is cleared.
-      console.warn('Failed to clear API key from cloud:', err);
+      if (err instanceof TimeoutError) {
+        console.warn('Clear API key timed out (cloud sync skipped):', err.message);
+      } else {
+        // Even if cloud sync fails, the local state is already cleared.
+        console.warn('Failed to clear API key from cloud:', err);
+      }
+    } finally {
+      setAiClearing(false);
     }
   }, [aiProvider, aiModel, aiOllamaUrl, isEn, updateConfig]);
 
@@ -401,11 +424,12 @@ export const SettingsPage: React.FC = () => {
                       type="button"
                       className="btn btn-outline btn-xs flex align-center justify-center"
                       onClick={() => void handleClearApiKey()}
+                      disabled={aiClearing}
                       style={{ position: 'absolute', right: '36px', top: '50%', transform: 'translateY(-50%)', padding: '6px' }}
                       title={isEn ? 'Clear API key' : 'Xoá khóa API'}
                       aria-label={isEn ? 'Clear API key' : 'Xoá khóa API'}
                     >
-                      <Eraser size={14} />
+                      {aiClearing ? <Loader2 size={14} className="spin" /> : <Eraser size={14} />}
                     </button>
                   )}
                 </div>
