@@ -1,10 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { PROVIDER_MODELS, PROVIDER_LABELS, testAIConnection } from '../lib/aiClient';
 import type { AIProvider as AIProviderType, AIConfig } from '../lib/aiClient';
-import { Settings, User, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi } from 'lucide-react';
+import { Settings, User, Trash2, ShieldAlert, Check, Bot, Eye, EyeOff, Loader2, CheckCircle, AlertCircle, Wifi, Eraser } from 'lucide-react';
 
 const AI_PROVIDERS: { value: AIProviderType; label: string }[] = [
   { value: 'none', label: PROVIDER_LABELS.none },
@@ -173,6 +173,71 @@ export const SettingsPage: React.FC = () => {
     }
   };
 
+  // CH1 (diagnosis 2026-06-06, fix-1): the API key cannot be FULLY
+  // hidden once it lives in the browser (localStorage + React state
+  // are readable via DevTools). The Tier C server-side fix (proxy
+  // via Edge Function with server-side GEMINI_API_KEY) is the only
+  // way to eliminate the exposure. For Tier A/D we ship 3
+  // mitigations:
+  //
+  //   1. "Clear API key" button: wipes the key from local state +
+  //      savedConfig (which clears the localStorage cache +
+  //      ai_configs cloud row). One-tap revoke for shoulder-surfing
+  //      or shared-device scenarios.
+  //   2. Auto-hide timer: if the user reveals the key with the
+  //      show/hide toggle, the field re-masks after 30 s. Shortens
+  //      the window where the value is visible on screen.
+  //   3. Prominent warning: the SECURITY NOTE text below the field
+  //      is colored with --warning (was text-secondary gray) so the
+  //      "not encrypted" caveat is impossible to miss.
+  const handleClearApiKey = useCallback(async () => {
+    if (!window.confirm(isEn
+      ? 'Clear the saved API key? You will need to re-enter it to use AI features.'
+      : 'Xoá khóa API đã lưu? Bạn sẽ cần nhập lại để dùng các tính năng AI.')) {
+      return;
+    }
+    setAiApiKey('');
+    setShowApiKey(false);
+    setAiSaved(false);
+    setAiTestResult(null);
+    // Persist the cleared state through AIContext so localStorage +
+    // ai_configs row get wiped too.
+    try {
+      await updateConfig({
+        provider: aiProvider,
+        apiKey: '',
+        model: aiModel,
+        ollamaBaseUrl: aiProvider === 'ollama' ? aiOllamaUrl : undefined,
+      });
+    } catch (err) {
+      // Even if cloud sync fails, the local state is cleared.
+      console.warn('Failed to clear API key from cloud:', err);
+    }
+  }, [aiProvider, aiModel, aiOllamaUrl, isEn, updateConfig]);
+
+  // Auto-hide the API key 30 s after the user reveals it. The
+  // timer is cleared on unmount or when the user hides it manually.
+  const autoHideTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    if (!showApiKey) {
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
+        autoHideTimerRef.current = null;
+      }
+      return;
+    }
+    autoHideTimerRef.current = setTimeout(() => {
+      setShowApiKey(false);
+      autoHideTimerRef.current = null;
+    }, 30_000);
+    return () => {
+      if (autoHideTimerRef.current) {
+        clearTimeout(autoHideTimerRef.current);
+        autoHideTimerRef.current = null;
+      }
+    };
+  }, [showApiKey]);
+
   const handleResetLocalStorage = () => {
     if (window.confirm(isEn 
       ? 'Are you sure you want to delete all local progress, words learned, and writing submissions? This cannot be undone.'
@@ -317,28 +382,65 @@ export const SettingsPage: React.FC = () => {
                     value={aiApiKey}
                     onChange={(e) => setAiApiKey(e.target.value)}
                     placeholder={`${isEn ? 'Enter your' : 'Nhập'} ${PROVIDER_LABELS[aiProvider]} API key`}
-                    style={{ paddingRight: '40px' }}
+                    style={{ paddingRight: '76px' }}
+                    autoComplete="off"
+                    spellCheck={false}
                   />
-                  <button 
+                  <button
                     type="button"
                     className="btn btn-outline btn-xs flex align-center justify-center"
                     onClick={() => setShowApiKey(!showApiKey)}
                     style={{ position: 'absolute', right: '4px', top: '50%', transform: 'translateY(-50%)', padding: '6px' }}
                     title={showApiKey ? 'Hide' : 'Show'}
+                    aria-label={showApiKey ? 'Hide API key' : 'Show API key'}
                   >
                     {showApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
                   </button>
+                  {aiApiKey && (
+                    <button
+                      type="button"
+                      className="btn btn-outline btn-xs flex align-center justify-center"
+                      onClick={() => void handleClearApiKey()}
+                      style={{ position: 'absolute', right: '36px', top: '50%', transform: 'translateY(-50%)', padding: '6px' }}
+                      title={isEn ? 'Clear API key' : 'Xoá khóa API'}
+                      aria-label={isEn ? 'Clear API key' : 'Xoá khóa API'}
+                    >
+                      <Eraser size={14} />
+                    </button>
+                  )}
                 </div>
-                <span className="body-xs text-secondary" style={{ marginTop: '4px', display: 'block' }}>
-                  {/* SECURITY NOTE (Tier C, DEFERRED): API keys are stored unencrypted -
-                      browser localStorage and, in cloud mode, the Supabase ai_config row -
-                      and travel directly from the browser to the provider. Full remediation
-                      (server-side proxy + encryption at rest) is out of scope for Tier A;
-                      tracked for Tier C. See non-scope.md. Compliance sign-off: BA + DevOps. */}
-                  {isEn
-                    ? "Your API key is stored in this browser's local storage and is sent directly from your browser to the AI provider with each request. It is not encrypted, so avoid using a shared or public device."
-                    : 'Khóa API của bạn được lưu trong bộ nhớ cục bộ của trình duyệt này và được gửi trực tiếp từ trình duyệt đến nhà cung cấp AI trong mỗi yêu cầu. Khóa không được mã hóa, vì vậy hãy tránh dùng trên thiết bị chung hoặc công cộng.'}
-                </span>
+                {/* CH1 (fix-1): SECURITY NOTE styled as a warning (was
+                    text-secondary gray, easy to miss). Reminds the user
+                    that the key is in browser localStorage and is
+                    visible to anyone with DevTools. Full remediation
+                    requires the Tier C server-side proxy (see comment
+                    in the .ts file). */}
+                <div
+                  className="flex align-start gap-xs body-xs"
+                  style={{
+                    marginTop: '6px',
+                    padding: '8px 10px',
+                    borderRadius: 'var(--radius-md)',
+                    border: '1px solid var(--warning)',
+                    background: 'color-mix(in srgb, var(--warning) 8%, transparent)',
+                    color: 'var(--warning)',
+                    display: 'flex',
+                  }}
+                  role="note"
+                  aria-live="polite"
+                >
+                  <ShieldAlert size={14} style={{ flexShrink: 0, marginTop: '2px' }} aria-hidden="true" />
+                  <span style={{ color: 'var(--warning)' }}>
+                    {/* SECURITY NOTE (Tier C, DEFERRED): API keys are stored unencrypted -
+                        browser localStorage and, in cloud mode, the Supabase ai_config row -
+                        and travel directly from the browser to the provider. Full remediation
+                        (server-side proxy + encryption at rest) is out of scope for Tier A;
+                        tracked for Tier C. See non-scope.md. Compliance sign-off: BA + DevOps. */}
+                    {isEn
+                      ? 'Your API key is stored in this browser\u2019s local storage and is sent directly from your browser to the AI provider with each request. It is NOT encrypted \u2014 anyone with DevTools access on this device can read it. Avoid shared/public devices. Use the "Clear" button when you finish a session.'
+                      : 'Khóa API được lưu trong bộ nhớ cục bộ của trình duyệt này và được gửi trực tiếp từ trình duyệt đến nhà cung cấp AI mỗi lần gọi. Khóa KHÔNG được mã hoá \u2014 bất kỳ ai có DevTools trên thiết bị này đều đọc được. Tránh dùng trên thiết bị chung/công cộng. Bấm "Xoá" khi kết thúc phiên.'}
+                  </span>
+                </div>
               </div>
             )}
 
