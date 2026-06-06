@@ -33,13 +33,22 @@ import {
 interface PoolItem {
   sentence: string;
   sourceCardId: string;
+  // CH5 (2026-06-06): IPA of the sentence, surfaced as a written
+  // pronunciation hint above the target sentence so the Learner can
+  // see how to say it before recording. Optional - some generated
+  // vocab cards may not have it.
+  phonetic?: string;
 }
 
 function buildSeedPool(): PoolItem[] {
   const items: PoolItem[] = [];
   for (const card of seedFlashcards) {
     if (card.example_en && card.example_en.trim().length > 0) {
-      items.push({ sentence: card.example_en.trim(), sourceCardId: card.id });
+      items.push({
+        sentence: card.example_en.trim(),
+        sourceCardId: card.id,
+        phonetic: card.example_phonetic,
+      });
     }
   }
   return items;
@@ -85,7 +94,11 @@ export const PronunciationPage: React.FC = () => {
         const extras: PoolItem[] = [];
         for (const c of generated) {
           if (c.example_en && c.example_en.trim().length > 0 && !seedIds.has(c.id)) {
-            extras.push({ sentence: c.example_en.trim(), sourceCardId: c.id });
+            extras.push({
+              sentence: c.example_en.trim(),
+              sourceCardId: c.id,
+              phonetic: c.example_phonetic,
+            });
           }
         }
         if (extras.length > 0) setPool([...buildSeedPool(), ...extras]);
@@ -108,6 +121,13 @@ export const PronunciationPage: React.FC = () => {
   const activeSourceCardId = useFallback
     ? (FALLBACK_CHALLENGES[activeIdx % FALLBACK_CHALLENGES.length]?.id ?? 'fallback')
     : pool[activeIdx]?.sourceCardId ?? 'unknown';
+  // CH5 (2026-06-06): IPA hint for the current sentence. The pool
+  // carries it per-card; the fallback challenges have their own
+  // `phonetic` field. Either path renders above the target sentence
+  // so the Learner has a written guide before they record.
+  const activePhonetic = useFallback
+    ? (FALLBACK_CHALLENGES[activeIdx % FALLBACK_CHALLENGES.length]?.phonetic ?? '')
+    : (pool[activeIdx]?.phonetic ?? '');
   const activeFallback = useFallback
     ? FALLBACK_CHALLENGES[activeIdx % FALLBACK_CHALLENGES.length]
     : null;
@@ -154,7 +174,13 @@ export const PronunciationPage: React.FC = () => {
   useEffect(() => { void loadHistory(); }, [loadHistory]);
 
   // --- Speech + speech synth ---
-  const { speak } = useSpeechSynthesis();
+  // CH5 (2026-06-06): destructure `status` too so we can show a
+  // "Generating audio..." badge while the Zephyr Edge function is
+  // busy. The default (off / direct-stub) tier is near-instant;
+  // the proxy (Zephyr) tier can take 2-5s on a slow network, and
+  // without a spinner the Learner is left wondering if the button
+  // click registered.
+  const { speak, status: ttsStatus } = useSpeechSynthesis();
   const { isListening, isSupported: recognitionSupported, toggle: toggleListening } = useSpeechRecognition({
     lang: 'en-US',
     onStart: () => {
@@ -243,27 +269,86 @@ export const PronunciationPage: React.FC = () => {
           {isEn ? 'Read this Sentence Aloud' : 'Hãy đọc to câu này'}
         </span>
 
+        {/* CH5 (2026-06-06): IPA hint above the target sentence.
+            For the seed-pool path, the phonetic comes from the
+            flashcard's example_phonetic field. For the fallback
+            challenges, it comes from PronunciationChallenge.phonetic.
+            Either way it shows as a subtle monospace pill so the
+            Learner can see the pronunciation guide before recording. */}
+        {activePhonetic && (
+          <span
+            className="body-sm font-mono text-secondary mb-sm"
+            data-testid="pronunciation-ipa"
+            style={{
+              padding: '4px 10px',
+              borderRadius: '6px',
+              background: 'var(--bg-secondary)',
+              color: 'var(--text-secondary)',
+              letterSpacing: '0.02em',
+            }}
+            aria-label={isEn ? 'Pronunciation hint' : 'Gợi ý phát âm'}
+          >
+            {activePhonetic}
+          </span>
+        )}
+
         <h2 className="title-md text-primary pronunciation-target-text" style={{ margin: 'var(--spacing-xs) 0' }}>
           {activeSentence}
         </h2>
 
         {activeFallback && (
-          <>
-            <span className="body-sm font-mono text-secondary mb-sm" style={{ padding: '2px 8px', borderRadius: '4px', background: 'var(--bg-secondary)' }}>
-              {activeFallback.phonetic}
-            </span>
-            <p className="body-sm text-tertiary italic mb-lg">{activeFallback.translation_vi}</p>
-          </>
+          <p className="body-sm text-tertiary italic mb-lg">{activeFallback.translation_vi}</p>
         )}
 
         <button
-          className="btn btn-outline btn-sm flex align-center gap-xs mb-lg"
+          className="btn btn-outline btn-sm flex align-center gap-xs mb-sm"
           onClick={handleSpeakReference}
+          disabled={ttsStatus === 'synthesizing'}
           style={{ padding: '8px 16px' }}
+          aria-label={isEn ? 'Listen to correct native voice' : 'Nghe giọng bản xứ chuẩn'}
         >
-          <Volume2 size={16} />
-          <span>{isEn ? 'Listen to Correct Native Voice' : 'Nghe giọng bản xứ chuẩn'}</span>
+          {ttsStatus === 'synthesizing' ? (
+            <Loader2 size={16} className="spin" />
+          ) : (
+            <Volume2 size={16} />
+          )}
+          <span>
+            {ttsStatus === 'synthesizing'
+              ? (isEn ? 'Generating audio…' : 'Đang tạo âm thanh…')
+              : (isEn ? 'Listen to Correct Native Voice' : 'Nghe giọng bản xứ chuẩn')}
+          </span>
         </button>
+
+        {/* CH5 (2026-06-06): TTS progress badge. Surfaces a small
+            live region so the Learner knows the click registered
+            and audio is being synthesized (especially relevant for
+            the proxy / Zephyr tier, which can take 2-5s on a slow
+            network). Hidden when idle; becomes "Playing…" briefly
+            during the AudioBuffer playback window. */}
+        {ttsStatus === 'synthesizing' && (
+          <span
+            className="body-xs flex align-center gap-xs"
+            role="status"
+            aria-live="polite"
+            data-testid="tts-loading-badge"
+            style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--spacing-md)' }}
+          >
+            <Loader2 size={12} className="spin" />
+            <span>{isEn ? 'Contacting the AI speech service…' : 'Đang liên hệ dịch vụ giọng nói AI…'}</span>
+          </span>
+        )}
+        {ttsStatus === 'playing' && (
+          <span
+            className="body-xs flex align-center gap-xs"
+            role="status"
+            aria-live="polite"
+            data-testid="tts-playing-badge"
+            style={{ color: 'var(--text-tertiary)', marginBottom: 'var(--spacing-md)' }}
+          >
+            <Volume2 size={12} />
+            <span>{isEn ? 'Playing…' : 'Đang phát…'}</span>
+          </span>
+        )}
 
         {/* Engine loader state (CH2 fix-2): removed. The on-device
             ASR engine was dead code (loaded but never used the
