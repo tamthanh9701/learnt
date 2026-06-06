@@ -65,6 +65,17 @@ const fsrsInstance = fsrs();
  * VocabError('seed_failed', ...) so the page can render a useful
  * message ("check RLS policies on topics/flashcards") and a retry
  * button. The function still never throws in the happy path.
+ *
+ * CH7 (2026-06-07, P1-#3): in cloud mode this function is effectively
+ * dead code - migration 004 enabled RLS on `topics` and
+ * `flashcards` with ONLY a SELECT policy, so the INSERT path
+ * below ALWAYS fails with a 42501 (RLS violation) for an
+ * authenticated user. The CH4 error path correctly surfaces this
+ * as a 'seed_failed' VocabError with an RLS hint. The proper
+ * remediation is migration 005 (run by the project owner) which
+ * seeds via the service_role key. Until then, the app works
+ * because migrations 001-004 are assumed to have already seeded
+ * the topics and flashcards tables.
  */
 export const seedDatabaseIfNeeded = async (userId: string, isMock: boolean): Promise<void> => {
   if (isMock) {
