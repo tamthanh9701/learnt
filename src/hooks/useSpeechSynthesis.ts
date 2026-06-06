@@ -161,8 +161,18 @@ async function playBuffer(buffer: AudioBuffer): Promise<boolean> {
 /**
  * The original speechSynthesis behavior, preserved verbatim as the universal
  * fallback (BR-10). Returns true if it could speak, false if unsupported.
+ *
+ * Exported for unit testing the cancel+speak race (CH3, 2026-06-06).
+ *
+ * CH3 (diagnosis 2026-06-06, fix-3): the synchronous cancel() + speak()
+ * pattern is a known race on Chrome/Safari/Firefox — the still-pending
+ * cancel() can kill the freshly-queued speak() utterance. Symptom: "After
+ * sentence 1, the Pronunciation Drill native voice is silent on sentence
+ * 2+". The fix defers speak() by 50ms (enough for cancel() to settle on
+ * every supported browser per Chromium source, but small enough to be
+ * imperceptible to the Learner).
  */
-function speakViaSpeechSynthesis(
+export function speakViaSpeechSynthesis(
   text: string,
   lang: string,
   voices: SpeechSynthesisVoice[],
@@ -173,7 +183,14 @@ function speakViaSpeechSynthesis(
   utterance.lang = lang;
   const voice = voices.find((v) => v.lang.startsWith('en') && v.name.includes('Google'));
   if (voice) utterance.voice = voice;
-  window.speechSynthesis.speak(utterance);
+  // Defer speak() so the still-pending cancel() above can drain first.
+  // Without this, the new utterance can be queued and immediately killed
+  // by the cancel that hasn't finished settling. 50ms is below the
+  // perceptual threshold (~100ms) and above the time cancel() needs
+  // across all supported browsers.
+  setTimeout(() => {
+    window.speechSynthesis.speak(utterance);
+  }, 50);
   return true;
 }
 
