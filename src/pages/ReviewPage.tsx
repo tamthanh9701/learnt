@@ -9,6 +9,21 @@ import type { Grade, Card as FSRSCard } from 'ts-fsrs';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import { Volume2, ChevronLeft, Award, HelpCircle } from 'lucide-react';
 
+/**
+ * Fisher-Yates shuffle: O(n) uniform shuffle (CH7 P2-#15).
+ * Replaces the previous `arr.sort(() => Math.random() - 0.5)` which
+ * is biased by the sort algorithm's stability and produces a
+ * non-uniform distribution. Inline implementation to avoid
+ * adding a dependency for a single 5-line helper.
+ */
+function fisherYatesShuffle<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
 export const ReviewPage: React.FC = () => {
   const { user, isMock, refreshProfile } = useAuth();
   const { t } = useLanguage();
@@ -37,8 +52,12 @@ export const ReviewPage: React.FC = () => {
       setLoading(true);
       const sessionCards = await fetchCardsForSession(user.id, topicId, isMock, mode);
       
-      // Shuffle cards to mix them up
-      const shuffled = [...sessionCards].sort(() => Math.random() - 0.5);
+      // Shuffle cards uniformly (CH7 P2-#15).
+      // Pre-fix used [...arr].sort(() => Math.random() - 0.5) which
+      // is NOT a uniform shuffle - the distribution is biased by
+      // the sort algorithm's stability. Replaced with Fisher-Yates,
+      // the canonical O(n) uniform shuffle.
+      const shuffled = fisherYatesShuffle([...sessionCards]);
       setCards(shuffled);
       setCurrentIndex(0);
       setShowAnswer(false);

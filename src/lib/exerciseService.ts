@@ -68,34 +68,34 @@ export const seedExercises: Record<string, ExerciseQuestion[]> = {
   ],
   'topic-business': [
     {
-      id: 'ex-edu-1',
+      id: 'ex-biz-1',
       type: 'mcq',
-      prompt_en: 'Identify the word representing the context of teaching, instruction, or schooling:',
-      prompt_vi: 'Xác định từ đại diện cho bối cảnh giảng dạy, hướng dẫn hoặc đi học:',
-      options: ['Vacation', 'Education', 'Entertainment', 'Pollution'],
-      correct_option: 'Education',
-      explanation_en: 'Education is the process of receiving or giving systematic instruction, especially at a school.',
-      explanation_vi: 'Education (Giáo dục) là quá trình nhận hoặc cung cấp hướng dẫn có hệ thống, đặc biệt là ở trường học.'
+      prompt_en: 'Choose the word that means: "To work jointly with others on a project or activity."',
+      prompt_vi: 'Chọn từ có nghĩa: "Làm việc chung với người khác trên một dự án hoặc hoạt động."',
+      options: ['Collaborate', 'Compete', 'Calculate', 'Cancel'],
+      correct_option: 'Collaborate',
+      explanation_en: 'To collaborate means to work jointly with others. The other options are unrelated verbs.',
+      explanation_vi: 'Collaborate nghĩa là làm việc chung với người khác. Các lựa chọn khác là những động từ không liên quan.',
     },
     {
-      id: 'ex-edu-2',
+      id: 'ex-biz-2',
       type: 'cloze',
       prompt_en: 'Fill in the blank with the correct vocabulary word:',
       prompt_vi: 'Điền vào chỗ trống từ vựng chính xác:',
-      sentence_with_blank: 'Online platforms have revolutionized modern [blank] systems.',
-      correct_answer: 'education',
-      explanation_en: 'The sentence speaks of online schooling/instruction, which refers to the "education" system.',
-      explanation_vi: 'Câu nói về trường học/hướng dẫn trực tuyến, đề cập đến hệ thống giáo dục "education".'
+      sentence_with_blank: 'After months of [blank], the two companies finally agreed on a partnership.',
+      correct_answer: 'negotiation',
+      explanation_en: 'Negotiation is the process of discussing terms to reach an agreement. The sentence describes a business agreement process.',
+      explanation_vi: 'Negotiation là quá trình thảo luận các điều khoản để đạt được thỏa thuận. Câu mô tả quá trình đạt được thỏa thuận kinh doanh.',
     },
     {
-      id: 'ex-edu-3',
+      id: 'ex-biz-3',
       type: 'reorder',
-      prompt_en: 'Reorder the words to formulate a statement about schooling:',
-      prompt_vi: 'Sắp xếp lại các từ để tạo thành một tuyên bố về trường học:',
-      scrambled_words: ['is', 'key', 'to', 'education', 'success', 'the'],
-      correct_sentence: 'education is the key to success',
-      explanation_en: 'The correct order is "education is the key to success".',
-      explanation_vi: 'Thứ tự chính xác là "education is the key to success" (Giáo dục là chìa khóa dẫn đến thành công).'
+      prompt_en: 'Reorder the words to make a correct sentence about business:',
+      prompt_vi: 'Sắp xếp lại các từ để tạo thành câu đúng về kinh doanh:',
+      scrambled_words: ['meeting', 'the', 'quarterly', 'is', 'next', 'Tuesday'],
+      correct_sentence: 'the quarterly meeting is next tuesday',
+      explanation_en: 'The correct order forms: "The quarterly meeting is next Tuesday."',
+      explanation_vi: 'Thứ tự đúng tạo thành: "The quarterly meeting is next Tuesday." (Cuộc họp hàng quý là thứ Ba tuần sau.)',
     }
   ]
 };
@@ -164,44 +164,7 @@ Make exercises relevant, educational, and at intermediate English level.`;
   }
 
   if (isMock) {
-    // Return seed exercises if present, otherwise generate a mock set based on topicId
-    if (seedExercises[topicId]) {
-      return seedExercises[topicId];
-    }
-    
-    // Fallback generator for other topics
-    return [
-      {
-        id: `ex-gen-${topicId}-1`,
-        type: 'mcq',
-        prompt_en: 'Identify the correct definition for the core term of this topic.',
-        prompt_vi: 'Xác định định nghĩa đúng cho thuật ngữ cốt lõi của chủ đề này.',
-        options: ['Primary concept', 'Secondary element', 'Unrelated factor', 'Random choice'],
-        correct_option: 'Primary concept',
-        explanation_en: 'The primary concept represents the core study theme.',
-        explanation_vi: 'Khái niệm sơ cấp đại diện cho chủ đề học tập chính.'
-      },
-      {
-        id: `ex-gen-${topicId}-2`,
-        type: 'cloze',
-        prompt_en: 'Fill in the blank to complete this grammar logic:',
-        prompt_vi: 'Điền vào chỗ trống để hoàn thành logic ngữ pháp:',
-        sentence_with_blank: 'Learning vocabulary requires persistent [blank] practice.',
-        correct_answer: 'daily',
-        explanation_en: 'Daily practice helps consolidate spacing memory stability.',
-        explanation_vi: 'Luyện tập hàng ngày giúp củng cố tính ổn định của trí nhớ giãn cách.'
-      },
-      {
-        id: `ex-gen-${topicId}-3`,
-        type: 'reorder',
-        prompt_en: 'Reorder the scrambled word cards to form a logical English statement:',
-        prompt_vi: 'Sắp xếp lại các thẻ từ lộn xộn để tạo thành một câu tiếng Anh hợp lý:',
-        scrambled_words: ['daily', 'practice', 'makes', 'perfect', 'learning'],
-        correct_sentence: 'daily practice makes learning perfect',
-        explanation_en: 'The words assemble into: "Daily practice makes learning perfect."',
-        explanation_vi: 'Thứ tự đúng tạo thành: "Daily practice makes learning perfect." (Luyện tập hàng ngày tạo nên sự học tập hoàn hảo.)'
-      }
-    ];
+    return generateMockExercises(topicId);
   } else {
     // Call Supabase Edge function to generate AI exercises based on topic keywords
     try {
@@ -214,13 +177,66 @@ Make exercises relevant, educational, and at intermediate English level.`;
         return data.questions;
       }
       console.warn('Edge function returned invalid ExerciseQuestion[] shape, falling back.');
-      return fetchExercisesForTopic(topicId, true);
     } catch (err) {
       console.warn('ai-generate-exercises function not available or failed. Falling back to local generation.', err);
-      return fetchExercisesForTopic(topicId, true);
     }
+    // CH7 (2026-06-07, P2-#14): pre-fix did
+    //   return fetchExercisesForTopic(topicId, true);
+    // which is a RECURSIVE call to the same function. It worked
+    // because the isMock=true branch does NOT recurse, but the
+    // recursive structure is confusing and the original
+    // aiConfig is silently dropped. Now: extract the mock
+    // fallback into generateMockExercises() and call it
+    // directly. The intent ("use AI as primary, fall back to
+    // mock") is now obvious.
+    return generateMockExercises(topicId);
   }
 };
+
+/**
+ * Build a 3-exercise fallback set when the AI provider is not
+ * configured or the Edge function fails. Extracted from
+ * fetchExercisesForTopic (CH7 P2-#14) so the cloud branch can
+ * call it directly without recursion.
+ */
+function generateMockExercises(topicId: string): ExerciseQuestion[] {
+  if (seedExercises[topicId]) {
+    return seedExercises[topicId];
+  }
+  // Generic fallback for topics without a hand-curated seed.
+  return [
+    {
+      id: `ex-gen-${topicId}-1`,
+      type: 'mcq',
+      prompt_en: 'Identify the correct definition for the core term of this topic.',
+      prompt_vi: 'Xác định định nghĩa đúng cho thuật ngữ cốt lõi của chủ đề này.',
+      options: ['Primary concept', 'Secondary element', 'Unrelated factor', 'Random choice'],
+      correct_option: 'Primary concept',
+      explanation_en: 'The primary concept represents the core study theme.',
+      explanation_vi: 'Khái niệm sơ cấp đại diện cho chủ đề học tập chính.'
+    },
+    {
+      id: `ex-gen-${topicId}-2`,
+      type: 'cloze',
+      prompt_en: 'Fill in the blank to complete this grammar logic:',
+      prompt_vi: 'Điền vào chỗ trống để hoàn thành logic ngữ pháp:',
+      sentence_with_blank: 'Learning vocabulary requires persistent [blank] practice.',
+      correct_answer: 'daily',
+      explanation_en: 'Daily practice helps consolidate spacing memory stability.',
+      explanation_vi: 'Luyện tập hàng ngày giúp củng cố tính ổn định của trí nhớ giãn cách.'
+    },
+    {
+      id: `ex-gen-${topicId}-3`,
+      type: 'reorder',
+      prompt_en: 'Reorder the scrambled word cards to form a logical English statement:',
+      prompt_vi: 'Sắp xếp lại các thẻ từ lộn xộn để tạo thành một câu tiếng Anh hợp lý:',
+      scrambled_words: ['daily', 'practice', 'makes', 'perfect', 'learning'],
+      correct_sentence: 'daily practice makes learning perfect',
+      explanation_en: 'The words assemble into: "Daily practice makes learning perfect."',
+      explanation_vi: 'Thứ tự đúng tạo thành: "Daily practice makes learning perfect." (Luyện tập hàng ngày tạo nên sự học tập hoàn hảo.)'
+    }
+  ];
+}
 
 /**
  * Records exercise completion in the daily progress table/local storage.

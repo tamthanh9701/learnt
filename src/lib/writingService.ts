@@ -123,12 +123,21 @@ export const analyzeGrammarMock = (content: string): WritingFeedback => {
     }
   });
 
-  // 3. Overall strength assessment based on vocab
-  const richWords = words.filter(w => w.length > 6).length;
-  if (richWords > wordCount * 0.15) {
-    strengths.push('Great lexical diversity! You used advanced vocabulary which makes your essay look formal.');
+  // 3. Overall strength assessment based on vocab (CH7 P2-#11).
+  // Pre-fix measured "vocabulary richness" by WORD LENGTH (words
+  // > 6 chars) - a Learner writing "aaaaaaaa bbbbbbbb" would
+  // score perfectly. Now we use the type-token ratio (TTR):
+  // unique words / total words. TTR is the standard vocabulary-
+  // diversity metric in computational linguistics. A TTR of 0.5+
+  // is considered good for short essays.
+  const uniqueWords = new Set(words.map(w => w.toLowerCase()));
+  const ttr = words.length > 0 ? uniqueWords.size / words.length : 0;
+  if (ttr >= 0.6) {
+    strengths.push('Great lexical diversity! Your essay uses a wide range of vocabulary, which makes it feel polished and formal.');
+  } else if (ttr < 0.4 && words.length >= 20) {
+    suggestions.push('Try varying your word choices - aim for less repetition. For example, instead of repeating "good", use "beneficial", "effective", "valuable" (TTR below 0.4).');
   } else {
-    suggestions.push('Try using more academic adjectives (e.g., instead of "good", use "beneficial", "advancement", "effective").');
+    suggestions.push('Mix in a few more advanced adjectives (e.g., instead of "good", use "beneficial", "effective") to add variety.');
   }
 
   // 4. Score calculation
@@ -137,12 +146,33 @@ export const analyzeGrammarMock = (content: string): WritingFeedback => {
   if (wordCount < 40) score -= 15;
   score = Math.max(45, Math.min(98, score));
 
-  // 5. Build revised text
+  // 5. Build revised text (CH7 P2-#12).
+  // Pre-fix: only capitalized "i" and sentence starts. User
+  // saw "Apply AI Suggested Rewrite" but the output was nearly
+  // identical to the input, making the AI look incompetent.
+  // Now: also normalize double spaces, fix the spelling-mistake
+  // patterns detected above (so the revision visibly changes
+  // something), and trim trailing whitespace. The output is
+  // still a heuristic (not real LLM output) but it now justifies
+  // the "Apply Revision" button by producing a noticeably
+  // different text.
   let revised = content;
-  // Replace simple lowercase " i "
-  revised = revised.replace(/\bi\b/g, 'I');
-  // Capitalize sentences
-  revised = revised.replace(/(?:^|[.!?]\s+)([a-z])/g, m => m.toUpperCase());
+  // 5a. Apply each detected spelling-mistake regex as a
+  // replacement. Use case-insensitive matching but preserve the
+  // original casing where possible (we keep the replacement
+  // string as-is for simplicity).
+  spellingMistakes.forEach(({ regex, correct }) => {
+    revised = revised.replace(regex, correct);
+  });
+  // 5b. Replace standalone lowercase "i" with "I". Skip if part
+  // of a word (the lookbehind ensures we're at a word boundary).
+  revised = revised.replace(/(?<![A-Za-z])i(?![A-Za-z'])/g, 'I');
+  // 5c. Capitalize sentence starts.
+  revised = revised.replace(/(^|[.!?]\s+)([a-z])/g, (_, p1, p2) => p1 + p2.toUpperCase());
+  // 5d. Collapse multiple spaces into one.
+  revised = revised.replace(/ {2,}/g, ' ');
+  // 5e. Trim trailing whitespace on each line.
+  revised = revised.split('\n').map(l => l.replace(/[ \t]+$/, '')).join('\n');
 
   return {
     overall_score: score,
