@@ -18,6 +18,26 @@ export interface TopicProgress {
   dueCards: number;
 }
 
+// CH4 (diagnosis 2026-06-06, fix-4): typed errors so the page can
+// render a useful message + retry button. The pre-fix code
+// `console.error`'d the seed failure and silently returned an empty
+// topic list, so Learners had no way to know whether the cause was
+// RLS, an empty topics table, a network error, or a 401 from a
+// stale JWT. Now we throw a small union of `kind`s, the page
+// branches on them.
+export type VocabErrorKind = 'seed_failed' | 'fetch_failed' | 'empty';
+
+export class VocabError extends Error {
+  kind: VocabErrorKind;
+  cause?: unknown;
+  constructor(kind: VocabErrorKind, message: string, cause?: unknown) {
+    super(message);
+    this.name = 'VocabError';
+    this.kind = kind;
+    this.cause = cause;
+  }
+}
+
 export interface ReviewSessionCard {
   id: string;
   topic_id?: string;
@@ -37,7 +57,14 @@ const fsrsInstance = fsrs();
 
 
 /**
- * Seeding helper to populate localStorage or Supabase on first run
+ * Seeding helper to populate localStorage or Supabase on first run.
+ *
+ * CH4: this function USED to swallow seed failures (console.error
+ * only) and return normally. The page then saw an empty topic list
+ * and had no way to surface the cause. Now we throw a typed
+ * VocabError('seed_failed', ...) so the page can render a useful
+ * message ("check RLS policies on topics/flashcards") and a retry
+ * button. The function still never throws in the happy path.
  */
 export const seedDatabaseIfNeeded = async (userId: string, isMock: boolean): Promise<void> => {
   if (isMock) {
@@ -49,45 +76,61 @@ export const seedDatabaseIfNeeded = async (userId: string, isMock: boolean): Pro
       localStorage.setItem(`learnt_learner_cards_${userId}`, JSON.stringify([]));
       localStorage.setItem(`learnt_seeded_${userId}`, 'true');
     }
-  } else {
-    // Supabase Seeding
-    try {
-      // 1. Check if topics table is populated
-      const { data: topics, error: topicsError } = await supabase.from('topics').select('id');
-      if (topicsError) throw topicsError;
+    return;
+  }
+  // Supabase Seeding
+  // 1. Check if topics table is populated
+  const { data: topics, error: topicsError } = await supabase.from('topics').select('id');
+  if (topicsError) {
+    throw new VocabError(
+      'seed_failed',
+      `Could not query the topics table: ${topicsError.message || topicsError.code || 'unknown'}. If you are running this in your own Supabase project, check the RLS policy on the topics table.`,
+      topicsError,
+    );
+  }
 
-      if (!topics || topics.length === 0) {
-        // Seed topics
-        const { error: insertTopicsError } = await supabase.from('topics').insert(
-          seedTopics.map(t => ({
-            id: t.id,
-            name_en: t.name_en,
-            name_vi: t.name_vi,
-            description_en: t.description_en,
-            description_vi: t.description_vi,
-          }))
-        );
-        if (insertTopicsError) throw insertTopicsError;
+  if (topics && topics.length > 0) {
+    return; // already seeded
+  }
 
-        // Seed flashcards
-        const { error: insertCardsError } = await supabase.from('flashcards').insert(
-          seedFlashcards.map(c => ({
-            id: c.id,
-            topic_id: c.topic_id,
-            word: c.word,
-            part_of_speech: c.part_of_speech,
-            phonetic: c.phonetic,
-            definition_en: c.definition_en,
-            definition_vi: c.definition_vi,
-            example_en: c.example_en,
-            example_vi: c.example_vi,
-          }))
-        );
-        if (insertCardsError) throw insertCardsError;
-      }
-    } catch (err) {
-      console.error('Error seeding Supabase:', err);
-    }
+  // 2. Seed topics (RLS may block this; surface the error)
+  const { error: insertTopicsError } = await supabase.from('topics').insert(
+    seedTopics.map(t => ({
+      id: t.id,
+      name_en: t.name_en,
+      name_vi: t.name_vi,
+      description_en: t.description_en,
+      description_vi: t.description_vi,
+    })),
+  );
+  if (insertTopicsError) {
+    throw new VocabError(
+      'seed_failed',
+      `Could not insert seed topics: ${insertTopicsError.message || insertTopicsError.code || 'unknown'}. Most often this is an RLS policy blocking the authenticated user from writing to the topics table. The topics table must allow INSERT for authenticated users, OR a service_role key must seed the rows via a migration / Edge Function.`,
+      insertTopicsError,
+    );
+  }
+
+  // 3. Seed flashcards
+  const { error: insertCardsError } = await supabase.from('flashcards').insert(
+    seedFlashcards.map(c => ({
+      id: c.id,
+      topic_id: c.topic_id,
+      word: c.word,
+      part_of_speech: c.part_of_speech,
+      phonetic: c.phonetic,
+      definition_en: c.definition_en,
+      definition_vi: c.definition_vi,
+      example_en: c.example_en,
+      example_vi: c.example_vi,
+    })),
+  );
+  if (insertCardsError) {
+    throw new VocabError(
+      'seed_failed',
+      `Topics were inserted but flashcards failed: ${insertCardsError.message || insertCardsError.code || 'unknown'}. Check the flashcards table RLS policy and that the topics foreign key exists.`,
+      insertCardsError,
+    );
   }
 };
 
@@ -95,6 +138,9 @@ export const seedDatabaseIfNeeded = async (userId: string, isMock: boolean): Pro
  * Fetch topics with FSRS progress details
  */
 export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): Promise<TopicProgress[]> => {
+  // CH4: surface seed failures (RLS-blocked inserts etc) so the
+  // page can render them, instead of silently returning an empty
+  // topic list.
   await seedDatabaseIfNeeded(userId, isMock);
 
   if (isMock) {
@@ -104,10 +150,21 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
 
     const now = new Date();
 
+    if (topics.length === 0) {
+      // Should not happen since seedDatabaseIfNeeded populates
+      // localStorage on first call, but guard against the case
+      // where the user cleared localStorage between page loads
+      // and we re-fetched before the seed write completed.
+      throw new VocabError(
+        'empty',
+        'No topics were found in local storage. Try the "Reset Progress" action in Settings to re-seed.',
+      );
+    }
+
     return topics.map(topic => {
       const topicCards = flashcards.filter(c => c.topic_id === topic.id);
       const totalCards = topicCards.length;
-      
+
       const topicLearnedCards = learnerCards.filter(lc => {
         const cardObj = topicCards.find(c => c.id === lc.card_id);
         return !!cardObj;
@@ -123,42 +180,66 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
         dueCards,
       };
     });
-  } else {
-    // Supabase implementation
-    const { data: topics, error: topicsErr } = await supabase.from('topics').select('*');
-    if (topicsErr) throw topicsErr;
-
-    const { data: flashcards, error: cardsErr } = await supabase.from('flashcards').select('id, topic_id');
-    if (cardsErr) throw cardsErr;
-
-    const { data: learnerCards, error: learnerErr } = await supabase
-      .from('learner_cards')
-      .select('card_id, due')
-      .eq('learner_id', userId);
-    if (learnerErr) throw learnerErr;
-
-    const now = new Date().toISOString();
-
-    return (topics || []).map(topic => {
-      const topicCardIds = (flashcards || []).filter(c => c.topic_id === topic.id).map(c => c.id);
-      const totalCards = topicCardIds.length;
-
-      const topicLearned = (learnerCards || []).filter(lc => topicCardIds.includes(lc.card_id));
-      const learnedCards = topicLearned.length;
-      const dueCards = topicLearned.filter(lc => lc.due <= now).length;
-
-      return {
-        id: topic.id,
-        name_en: topic.name_en,
-        name_vi: topic.name_vi,
-        description_en: topic.description_en,
-        description_vi: topic.description_vi,
-        totalCards,
-        learnedCards,
-        dueCards,
-      };
-    });
   }
+  // Supabase implementation
+  const { data: topics, error: topicsErr } = await supabase.from('topics').select('*');
+  if (topicsErr) {
+    throw new VocabError(
+      'fetch_failed',
+      `Could not read topics: ${topicsErr.message || topicsErr.code || 'unknown'}. This is usually a network or auth issue - check that you are signed in and have a stable connection.`,
+      topicsErr,
+    );
+  }
+
+  const { data: flashcards, error: cardsErr } = await supabase.from('flashcards').select('id, topic_id');
+  if (cardsErr) {
+    throw new VocabError(
+      'fetch_failed',
+      `Could not read flashcards: ${cardsErr.message || cardsErr.code || 'unknown'}.`,
+      cardsErr,
+    );
+  }
+
+  const { data: learnerCards, error: learnerErr } = await supabase
+    .from('learner_cards')
+    .select('card_id, due')
+    .eq('learner_id', userId);
+  if (learnerErr) {
+    throw new VocabError(
+      'fetch_failed',
+      `Could not read learner_cards: ${learnerErr.message || learnerErr.code || 'unknown'}.`,
+      learnerErr,
+    );
+  }
+
+  if (!topics || topics.length === 0) {
+    throw new VocabError(
+      'empty',
+      'The topics table is empty in Supabase. The seed step should have populated it - check the RLS policy that blocks authenticated users from inserting, or run a service_role seed migration.',
+    );
+  }
+
+  const now = new Date().toISOString();
+
+  return (topics || []).map(topic => {
+    const topicCardIds = (flashcards || []).filter(c => c.topic_id === topic.id).map(c => c.id);
+    const totalCards = topicCardIds.length;
+
+    const topicLearned = (learnerCards || []).filter(lc => topicCardIds.includes(lc.card_id));
+    const learnedCards = topicLearned.length;
+    const dueCards = topicLearned.filter(lc => lc.due <= now).length;
+
+    return {
+      id: topic.id,
+      name_en: topic.name_en,
+      name_vi: topic.name_vi,
+      description_en: topic.description_en,
+      description_vi: topic.description_vi,
+      totalCards,
+      learnedCards,
+      dueCards,
+    };
+  });
 };
 
 /**

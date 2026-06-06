@@ -1,10 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { fetchTopicsAndProgress } from '../lib/vocabularyService';
-import type { TopicProgress } from '../lib/vocabularyService';
-import { BookOpen, AlertCircle, Sparkles, CheckCircle } from 'lucide-react';
+import { fetchTopicsAndProgress, VocabError } from '../lib/vocabularyService';
+import type { TopicProgress, VocabErrorKind } from '../lib/vocabularyService';
+import { BookOpen, AlertCircle, Sparkles, CheckCircle, RefreshCw } from 'lucide-react';
 
 export const VocabularyPage: React.FC = () => {
   const { user, isMock } = useAuth();
@@ -13,26 +13,39 @@ export const VocabularyPage: React.FC = () => {
 
   const [topics, setTopics] = useState<TopicProgress[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  // CH4: keep both the error KIND (for branching the message) and
+  // the raw message (for diagnostics). Pre-fix this was a single
+  // opaque "Could not load vocabulary topics" string and the
+  // user had no way to know whether RLS, network, or empty data
+  // was the cause.
+  const [error, setError] = useState<{ kind: VocabErrorKind; message: string } | null>(null);
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     if (!user) return;
     try {
       setLoading(true);
+      setError(null);
       const data = await fetchTopicsAndProgress(user.id, isMock);
       setTopics(data);
-      setError(null);
     } catch (err) {
       console.error('Error fetching vocabulary progress:', err);
-      setError('Could not load vocabulary topics.');
+      if (err instanceof VocabError) {
+        setError({ kind: err.kind, message: err.message });
+      } else if (err instanceof Error) {
+        // Unknown error shape (not from our service). Best-guess:
+        // it's a fetch failure.
+        setError({ kind: 'fetch_failed', message: err.message });
+      } else {
+        setError({ kind: 'fetch_failed', message: String(err) });
+      }
     } finally {
       setLoading(false);
     }
-  };
+  }, [user, isMock]);
 
   useEffect(() => {
-    loadData();
-  }, [user, isMock]);
+    void loadData();
+  }, [loadData]);
 
   const handleAction = (topicId: string, mode: 'learn' | 'review') => {
     navigate(`/vocabulary/review?topic=${topicId}&mode=${mode}`);
@@ -47,6 +60,90 @@ export const VocabularyPage: React.FC = () => {
     );
   }
 
+  if (error) {
+    // CH4: branch the user-facing copy on error.kind.
+    // seed_failed -> RLS / DB-permissions issue, suggest checking policies
+    // fetch_failed -> network / auth, suggest retry or sign-in
+    // empty       -> database is reachable but empty, suggest Reset
+    const isEn = locale === 'en';
+    const titleByKind: Record<VocabErrorKind, { en: string; vi: string }> = {
+      seed_failed: {
+        en: 'Could not load vocabulary topics (database permission error).',
+        vi: 'Không tải được chủ đề từ vựng (lỗi quyền cơ sở dữ liệu).',
+      },
+      fetch_failed: {
+        en: 'Could not reach the database.',
+        vi: 'Không kết nối được với cơ sở dữ liệu.',
+      },
+      empty: {
+        en: 'The topics table is empty.',
+        vi: 'Bảng chủ đề đang trống.',
+      },
+    };
+    const hintByKind: Record<VocabErrorKind, { en: string; vi: string }> = {
+      seed_failed: {
+        en: 'Most often this is a Supabase RLS policy blocking the authenticated user from writing to the topics / flashcards tables. The seed insert was rejected. If you are the project owner, add an INSERT policy for authenticated users, or run a service_role migration.',
+        vi: 'Thường là do chính sách RLS của Supabase chặn người dùng đã đăng nhập ghi vào bảng topics / flashcards. Nếu bạn là chủ dự án, hãy thêm chính sách INSERT cho người dùng đã xác thực, hoặc chạy migration với service_role.',
+      },
+      fetch_failed: {
+        en: 'Check your network connection and that you are still signed in. Tap Retry below to try again.',
+        vi: 'Kiểm tra kết nối mạng và xác nhận bạn vẫn đang đăng nhập. Nhấn "Thử lại" bên dưới.',
+      },
+      empty: {
+        en: 'The topics table is reachable but has no rows. The auto-seed step may have failed silently. Try the "Reset Progress" action in Settings to re-trigger the seed.',
+        vi: 'Bảng topics có thể truy cập nhưng không có dòng nào. Bước tự động seed có thể đã lỗi. Hãy thử "Đặt lại dữ liệu" trong phần Cài đặt để seed lại.',
+      },
+    };
+    const title = titleByKind[error.kind][isEn ? 'en' : 'vi'];
+    const hint = hintByKind[error.kind][isEn ? 'en' : 'vi'];
+    return (
+      <div className="vocabulary-container animate-fade-in">
+        <div className="vocab-header-section">
+          <h1 className="title-lg">{t('vocabulary.topics')}</h1>
+        </div>
+        <div className="card error-card flex flex-col gap-sm" role="alert" aria-live="assertive">
+          <div className="flex align-center gap-xs">
+            <AlertCircle size={20} style={{ color: 'var(--error)', flexShrink: 0 }} aria-hidden="true" />
+            <span className="title-xs" style={{ color: 'var(--error)' }}>{title}</span>
+          </div>
+          <p className="body-sm" style={{ color: 'var(--text-secondary)' }}>{hint}</p>
+          {error.message && (
+            <details>
+              <summary className="body-xs" style={{ cursor: 'pointer', color: 'var(--text-tertiary)' }}>
+                {isEn ? 'Show technical details' : 'Xem chi tiết kỹ thuật'}
+              </summary>
+              <pre className="body-xs" style={{
+                marginTop: '6px',
+                padding: '8px',
+                background: 'var(--bg-secondary)',
+                borderRadius: 'var(--radius-sm)',
+                whiteSpace: 'pre-wrap',
+                wordBreak: 'break-word',
+                color: 'var(--text-secondary)',
+              }}>{error.message}</pre>
+            </details>
+          )}
+          <div className="flex gap-sm" style={{ marginTop: 'var(--spacing-xs)' }}>
+            <button
+              className="btn btn-primary btn-sm flex align-center gap-xs"
+              onClick={() => void loadData()}
+              aria-label={isEn ? 'Retry loading vocabulary topics' : 'Thử lại tải chủ đề từ vựng'}
+            >
+              <RefreshCw size={14} aria-hidden="true" />
+              <span>{isEn ? 'Retry' : 'Thử lại'}</span>
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => navigate('/settings')}
+            >
+              <span>{isEn ? 'Open Settings' : 'Mở Cài đặt'}</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="vocabulary-container animate-fade-in">
       <div className="vocab-header-section">
@@ -55,13 +152,6 @@ export const VocabularyPage: React.FC = () => {
           Master vocabulary topics using the Free Spaced Repetition Scheduler (FSRS).
         </p>
       </div>
-
-      {error && (
-        <div className="error-banner flex align-center gap-sm">
-          <AlertCircle size={20} />
-          <span>{error}</span>
-        </div>
-      )}
 
       <div className="topics-grid grid grid-cols-2 gap-lg">
         {topics.map(topic => {
