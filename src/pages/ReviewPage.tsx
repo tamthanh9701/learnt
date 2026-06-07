@@ -71,6 +71,10 @@ export const ReviewPage: React.FC = () => {
 
   useEffect(() => {
     loadSessionCards();
+    // CH7 (2026-06-07): intentional run on session-param change.
+    // loadSessionCards is not memoized; the deps below capture
+    // exactly when a new session should load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, topicId, mode, isMock]);
 
   // Compute FSRS interval previews when a card is loaded
@@ -104,6 +108,11 @@ export const ReviewPage: React.FC = () => {
       });
       setIntervalPreviews(previews);
     }
+    // CH7 (2026-06-07): fsrsInstance is a module-stable singleton
+    // (created once via fsrs()); it never changes, so omitting it
+    // from deps is safe. The effect should recompute previews when
+    // the active card changes (currentIndex / cards).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, cards]);
 
 
@@ -121,6 +130,13 @@ export const ReviewPage: React.FC = () => {
     if (activeCard && !showAnswer) {
       handleSpeak();
     }
+    // CH7 (2026-06-07): auto-speak the word when a NEW card is
+    // shown. We intentionally key only on the card identity
+    // (currentIndex / activeCard) - not on handleSpeak (recreated
+    // each render) nor showAnswer (we only want the initial speak,
+    // not a re-speak when the learner flips the card). Including
+    // those would cause double-speaks.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentIndex, activeCard]);
 
   const handleRate = async (rating: Rating) => {

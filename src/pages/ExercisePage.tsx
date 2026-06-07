@@ -33,6 +33,19 @@ export const ExercisePage: React.FC = () => {
 
   const isEn = locale === 'en';
 
+  // CH7 (2026-06-07, react-hooks/immutability): resetInteraction was
+  // declared AFTER loadExercises but called from inside it (line 46).
+  // Function hoisting saved runtime correctness, but the lint flagged
+  // "accessed before it is declared". Moved the declaration above
+  // loadExercises so the order is honest.
+  const resetInteraction = () => {
+    setSelectedOption(null);
+    setClozeAnswer('');
+    setReorderedWords([]);
+    setChecked(false);
+    setIsCorrect(false);
+  };
+
   const loadExercises = async () => {
     if (!topicId) return;
     try {
@@ -54,15 +67,12 @@ export const ExercisePage: React.FC = () => {
 
   useEffect(() => {
     loadExercises();
+    // CH7 (2026-06-07): intentional run-on-mount + on-param-change.
+    // loadExercises is not memoized; adding it to deps would need a
+    // useCallback wrapper. The effect should fire exactly when
+    // topicId / isMock change, which these deps capture correctly.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [topicId, isMock]);
-
-  const resetInteraction = () => {
-    setSelectedOption(null);
-    setClozeAnswer('');
-    setReorderedWords([]);
-    setChecked(false);
-    setIsCorrect(false);
-  };
 
   const handleWordClick = (word: string, source: 'scrambled' | 'reordered') => {
     if (checked) return;

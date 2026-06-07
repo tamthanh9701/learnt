@@ -6,6 +6,7 @@ import { Flame, BookOpen, Mic, PenTool, ArrowRight, CheckCircle2, AlertCircle } 
 import { supabase } from '../lib/supabase';
 import { withTimeout, TimeoutError } from '../lib/timeout';
 import { displayStreak, dayKey } from '../lib/streak';
+import type { LearnerCardRecord } from '../lib/learnerCard';
 
 export const DashboardPage: React.FC = () => {
   const { user, profile, isMock } = useAuth();
@@ -29,9 +30,9 @@ export const DashboardPage: React.FC = () => {
         const savedCards = localStorage.getItem(`learnt_learner_cards_${user.id}`);
         let due = 0;
         if (savedCards) {
-          const cards = JSON.parse(savedCards);
+          const cards: LearnerCardRecord[] = JSON.parse(savedCards);
           const now = new Date();
-          due = cards.filter((c: any) => new Date(c.due) <= now).length;
+          due = cards.filter(c => new Date(c.due) <= now).length;
         } else {
           // Set 5 default due cards for first-time use
           due = 5;

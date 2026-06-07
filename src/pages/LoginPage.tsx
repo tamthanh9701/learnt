@@ -38,8 +38,9 @@ export const LoginPage: React.FC = () => {
         const { error } = await signIn(email, password);
         if (error) setErrorMsg(error.message || 'Invalid email or password');
       }
-    } catch (err: any) {
-      setErrorMsg(err.message || 'An unexpected error occurred');
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'An unexpected error occurred';
+      setErrorMsg(message);
     } finally {
       setLoading(false);
     }

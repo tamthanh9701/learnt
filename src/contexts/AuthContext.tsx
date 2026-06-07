@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '../lib/supabase';
 import { withTimeout } from '../lib/timeout';
-import type { User } from '@supabase/supabase-js';
+import type { AuthError, User } from '@supabase/supabase-js';
 
 export interface UserProfile {
   id: string;
@@ -18,10 +18,10 @@ interface AuthContextType {
   profile: UserProfile | null;
   loading: boolean;
   isMock: boolean;
-  signIn: (email: string, password: string) => Promise<{ error: any }>;
-  signUp: (email: string, password: string, displayName: string) => Promise<{ error: any }>;
-  signOut: () => Promise<{ error: any }>;
-  updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: any }>;
+  signIn: (email: string, password: string) => Promise<{ error: AuthError | null }>;
+  signUp: (email: string, password: string, displayName: string) => Promise<{ error: AuthError | null }>;
+  signOut: () => Promise<{ error: AuthError | null }>;
+  updateProfile: (updates: Partial<UserProfile>) => Promise<{ error: unknown }>;
   refreshProfile: () => Promise<void>;
 }
 

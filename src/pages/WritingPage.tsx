@@ -45,6 +45,10 @@ export const WritingPage: React.FC = () => {
 
   useEffect(() => {
     loadHistory();
+    // CH7 (2026-06-07): intentional run-on-mount + on user/isMock
+    // change. loadHistory is not memoized; the deps capture exactly
+    // when the submission history should reload.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user, isMock]);
 
   const handleSubmit = async (e: React.FormEvent) => {

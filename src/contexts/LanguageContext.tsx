@@ -3,6 +3,8 @@ import en from '../i18n/en.json';
 import vi from '../i18n/vi.json';
 
 type Locale = 'en' | 'vi';
+type TranslationLeaf = string | { [key: string]: TranslationLeaf };
+type Translations = { [K in Locale]: TranslationLeaf };
 
 interface LanguageContextType {
   locale: Locale;
@@ -12,12 +14,12 @@ interface LanguageContextType {
 
 const LanguageContext = createContext<LanguageContextType | undefined>(undefined);
 
-const translations: Record<Locale, any> = { en, vi };
+const translations: Translations = { en, vi };
 
 // Walk a dot-notation key through a translation tree; returns the string value
 // or undefined if any segment is missing or the leaf is not a string.
-const lookup = (tree: any, parts: string[]): string | undefined => {
-  let current = tree;
+const lookup = (tree: TranslationLeaf, parts: string[]): string | undefined => {
+  let current: TranslationLeaf = tree;
   for (const part of parts) {
     if (current && typeof current === 'object' && part in current) {
       current = current[part];

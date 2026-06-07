@@ -2,6 +2,8 @@ import { useState, useRef, useEffect } from 'react';
 import type {
   SpeechRecognitionInstance,
   SpeechRecognitionEvent,
+  SpeechRecognitionErrorEvent,
+  WINDOW_HELPERS,
 } from '../types/speech';
 
 /** Map a Web Speech recognition error code to an i18n message key. */
@@ -76,9 +78,8 @@ export function useSpeechRecognition(
   });
 
   useEffect(() => {
-    const Ctor =
-      (window as any).SpeechRecognition ||
-      (window as any).webkitSpeechRecognition;
+    const w = window as unknown as WINDOW_HELPERS;
+    const Ctor = w.SpeechRecognition || w.webkitSpeechRecognition;
 
     if (!Ctor) {
       setIsSupported(false);
@@ -135,8 +136,8 @@ export function useSpeechRecognition(
           optsRef.current.onResult?.(finalAccumRef.current);
         }
       };
-      recognition.onerror = (event: any) => {
-        optsRef.current.onError?.(event?.error || 'error');
+      recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        optsRef.current.onError?.(event.error || 'error');
         setInterimTranscript('');
         setIsListening(false);
       };

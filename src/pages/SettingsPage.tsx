@@ -60,6 +60,12 @@ export const SettingsPage: React.FC = () => {
       setAiModel('');
       setAiApiKey('');
     }
+    // CH7 (2026-06-07): fire ONLY when the provider changes. aiModel
+    // is read to check if the current model is still valid for the
+    // new provider, but we must NOT re-run when aiModel changes
+    // (that would fight the user's manual model selection). This is
+    // the intended "reset model on provider switch" behavior.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aiProvider]);
 
   const handleUpdateProfile = async (e: React.FormEvent) => {
@@ -168,11 +174,12 @@ export const SettingsPage: React.FC = () => {
       const reply = await testAIConnection(newConfig);
       clearTimeout(timeoutId);
       setAiTestResult({ success: true, message: reply.slice(0, 200) });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Connection failed';
       clearTimeout(timeoutId);
-      setAiTestResult({ 
-        success: false, 
-        message: err.message || isEn ? 'Connection failed' : 'Kết nối thất bại' 
+      setAiTestResult({
+        success: false,
+        message: isEn ? message : 'Kết nối thất bại',
       });
     } finally {
       setAiTesting(false);
