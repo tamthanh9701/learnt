@@ -3,6 +3,7 @@ import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 import { recordActivity } from './streak';
 import { isValidExerciseList } from './llmValidation';
+import { withTimeout } from './timeout';
 
 export type ExerciseType = 'mcq' | 'cloze' | 'reorder';
 
@@ -258,24 +259,56 @@ export const recordExerciseCompletion = async (
     await recordActivity(userId, true, new Date(now));
   } else {
     try {
-      const { data: progress, error: progErr } = await supabase
-        .from('daily_progress')
-        .select('*')
-        .eq('learner_id', userId)
-        .eq('activity_date', today)
-        .single();
+      // CH7 (2026-06-07, P3-#23): same pattern as writingService
+      // (P3-#22). Wrap daily_progress read + update in
+      // withTimeout so a slow / hung backend cannot leave the
+      // page in submitting state.
+      const progress = await withTimeout(
+        async (signal) => {
+          const res = await supabase
+            .from('daily_progress')
+            .select('*')
+            .eq('learner_id', userId)
+            .eq('activity_date', today)
+            .abortSignal(signal)
+            .single();
+          // PGRST116 = row not found, fine here.
+          if (res.error && res.error.code !== 'PGRST116') throw res.error;
+          return res.data;
+        },
+        5_000,
+        'exerciseService: readDailyProgress',
+      );
 
-      if (!progErr && progress) {
-        await supabase
-          .from('daily_progress')
-          .update({ exercises_completed: (progress.exercises_completed || 0) + 1 })
-          .eq('id', progress.id);
+      if (progress) {
+        await withTimeout(
+          async (signal) => {
+            // Same typing workaround as writingService - see
+            // comment there for the full rationale.
+            const builder = supabase
+              .from('daily_progress')
+              .update({ exercises_completed: (progress.exercises_completed || 0) + 1 })
+              .eq('id', progress.id) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+            const r = await builder.abortSignal(signal);
+            if (r.error) throw r.error;
+          },
+          5_000,
+          'exerciseService: updateDailyProgress',
+        );
       } else {
-        await supabase.from('daily_progress').insert({
-          learner_id: userId,
-          activity_date: today,
-          exercises_completed: 1,
-        });
+        await withTimeout(
+          async (signal) => {
+            const builder = supabase.from('daily_progress').insert({
+              learner_id: userId,
+              activity_date: today,
+              exercises_completed: 1,
+            }) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+            const r = await builder.abortSignal(signal);
+            if (r.error) throw r.error;
+          },
+          5_000,
+          'exerciseService: insertDailyProgress',
+        );
       }
 
       // Streak: any learning activity counts (centralized)

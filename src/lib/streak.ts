@@ -1,4 +1,5 @@
 import { supabase } from './supabase';
+import { withTimeout } from './timeout';
 
 type DayKey = string;
 
@@ -81,11 +82,26 @@ function doRecordMock(userId: string, today: DayKey): void {
 }
 
 async function doRecordCloud(userId: string, today: DayKey): Promise<void> {
-  const { data: row } = await supabase
-    .from('profiles')
-    .select('current_streak, longest_streak, last_activity_date')
-    .eq('id', userId)
-    .single();
+  // CH7 (2026-06-07, P3-#24): wrap each Supabase call in
+  // withTimeout. The previous code had no timeout - a slow /
+  // hung backend could keep this function running for 30+ s,
+  // hammering the server while the user moved on. 6s is
+  // generous (streak writes are not on the critical path; the
+  // caller usually doesn't await this).
+  const row = await withTimeout(
+    async (signal) => {
+      const res = await supabase
+        .from('profiles')
+        .select('current_streak, longest_streak, last_activity_date')
+        .eq('id', userId)
+        .abortSignal(signal)
+        .single();
+      if (res.error) throw res.error;
+      return res.data;
+    },
+    6_000,
+    'streak: readProfile',
+  );
 
   if (row) {
     const next = computeStreak(
@@ -93,14 +109,26 @@ async function doRecordCloud(userId: string, today: DayKey): Promise<void> {
       today,
       row.current_streak || 0
     );
-    await supabase
-      .from('profiles')
-      .update({
-        current_streak: next,
-        longest_streak: Math.max(row.longest_streak || 0, next),
-        last_activity_date: today,
-      })
-      .eq('id', userId);
+    await withTimeout(
+      async (signal) => {
+        // Same typing workaround as writing/exercise services:
+        // @supabase/postgrest-js 2.106.0 widens the builder
+        // type after `.update().eq()` back to PostgrestBuilder,
+        // hiding `.abortSignal()`. Cast to a permissive type.
+        const builder = supabase
+          .from('profiles')
+          .update({
+            current_streak: next,
+            longest_streak: Math.max(row.longest_streak || 0, next),
+            last_activity_date: today,
+          })
+          .eq('id', userId) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+        const res = await builder.abortSignal(signal);
+        if (res.error) throw res.error;
+      },
+      6_000,
+      'streak: updateProfile',
+    );
   }
 }
 

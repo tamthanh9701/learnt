@@ -18,6 +18,13 @@ export interface LearnerCardRecord {
   lapses: number;
   state: number;
   last_review: string | null;
+  // CH7 (2026-06-07): the actual storage has more fields than
+  // cardToRecord writes (some call sites set learning_steps and
+  // created_at, others don't). Optional here to keep cardToRecord
+  // happy. The full set is what comes back from SELECT * and what
+  // JSON.parse() produces on localStorage round-trips.
+  learning_steps?: number;
+  created_at?: string;
 }
 
 /**

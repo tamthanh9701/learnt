@@ -1,10 +1,12 @@
 import { supabase } from './supabase';
-import { seedTopics, seedFlashcards } from '../data/seedVocabulary';
-import type { SeedTopic, SeedFlashcard } from '../data/seedVocabulary';
 import { fsrs, createEmptyCard, Rating } from 'ts-fsrs';
 import type { Card as FSRSCard, Grade } from 'ts-fsrs';
 import { recordActivity } from './streak';
 import { cardToRecord } from './learnerCard';
+import type { LearnerCardRecord } from './learnerCard';
+import { seedTopics, seedFlashcards } from '../data/seedVocabulary';
+import type { SeedTopic, SeedFlashcard } from '../data/seedVocabulary';
+import { withTimeout } from './timeout';
 
 
 export interface TopicProgress {
@@ -157,7 +159,7 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
   if (isMock) {
     const topics: SeedTopic[] = JSON.parse(localStorage.getItem(`learnt_topics_${userId}`) || '[]');
     const flashcards: SeedFlashcard[] = JSON.parse(localStorage.getItem(`learnt_flashcards_${userId}`) || '[]');
-    const learnerCards: any[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
 
     const now = new Date();
 
@@ -211,10 +213,16 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
     );
   }
 
-  const { data: learnerCards, error: learnerErr } = await supabase
+  const { data: learnerCardsRaw, error: learnerErr } = await supabase
     .from('learner_cards')
     .select('card_id, due')
     .eq('learner_id', userId);
+  // The Supabase client's return type for `.select()` is generic
+  // `any[]`. The runtime shape matches LearnerCardRecord (we only
+  // select the two fields we use), so we cast at the boundary
+  // here. The `LearnerCardRecord` type is the canonical record
+  // type; learner_cards rows are a strict subset of it.
+  const learnerCards: LearnerCardRecord[] = (learnerCardsRaw ?? []) as LearnerCardRecord[];
   if (learnerErr) {
     throw new VocabError(
       'fetch_failed',
@@ -258,7 +266,7 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
  */
 export const getDueCardsCount = async (userId: string, isMock: boolean): Promise<number> => {
   if (isMock) {
-    const learnerCards: any[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
     const now = new Date();
     return learnerCards.filter(lc => new Date(lc.due) <= now).length;
   } else {
@@ -285,7 +293,7 @@ export const fetchCardsForSession = async (
 ): Promise<ReviewSessionCard[]> => {
   if (isMock) {
     const flashcards: SeedFlashcard[] = JSON.parse(localStorage.getItem(`learnt_flashcards_${userId}`) || '[]');
-    const learnerCards: any[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
 
     const topicCards = flashcards.filter(c => c.topic_id === topicId);
     const now = new Date();
@@ -350,11 +358,12 @@ export const fetchCardsForSession = async (
     const flashcardIds = (flashcards || []).map(c => c.id);
 
     // Get learner status
-    const { data: learnerCards, error: learnerErr } = await supabase
+    const { data: learnerCardsRaw, error: learnerErr } = await supabase
       .from('learner_cards')
       .select('*')
       .eq('learner_id', userId)
       .in('card_id', flashcardIds);
+    const learnerCards: LearnerCardRecord[] = (learnerCardsRaw ?? []) as LearnerCardRecord[];
     if (learnerErr) throw learnerErr;
 
     const now = new Date().toISOString();
@@ -427,7 +436,7 @@ export const submitCardReview = async (
   let currentFsrsCard: FSRSCard;
 
   if (isMock) {
-    const learnerCards: any[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
     const lc = learnerCards.find(l => l.card_id === cardId);
 
     if (lc) {
@@ -482,7 +491,7 @@ export const submitCardReview = async (
 
   // 3. Save updated card
   if (isMock) {
-    const learnerCards: any[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
     const index = learnerCards.findIndex(l => l.card_id === cardId);
 
     const existing = index >= 0 ? learnerCards[index] : undefined;
@@ -540,28 +549,62 @@ export const submitCardReview = async (
     }
 
     // Call Supabase daily_progress tracker
+    // CH7 (2026-06-07, P3-#24): same timeout treatment as writing
+    // and exercise services. The pre-fix code was unwrapped, so
+    // a slow / hung backend could keep the function running for
+    // 30+ seconds with no feedback to the user.
     const today = now.toISOString().split('T')[0];
-    const { data: progress, error: progErr } = await supabase
-      .from('daily_progress')
-      .select('*')
-      .eq('learner_id', userId)
-      .eq('activity_date', today)
-      .single();
+    const progress = await withTimeout(
+      async (signal) => {
+        const res = await supabase
+          .from('daily_progress')
+          .select('*')
+          .eq('learner_id', userId)
+          .eq('activity_date', today)
+          .abortSignal(signal)
+          .single();
+        // PGRST116 = row not found, fine here (will create below).
+        if (res.error && res.error.code !== 'PGRST116') throw res.error;
+        return res.data;
+      },
+      5_000,
+      'vocabularyService: readDailyProgress',
+    );
 
-    if (progErr && progErr.code === 'PGRST116') {
+    if (!progress) {
       // First review today, insert record
-      await supabase.from('daily_progress').insert({
-        learner_id: userId,
-        activity_date: today,
-        cards_reviewed: 1,
-      });
+      await withTimeout(
+        async (signal) => {
+          // Same typing workaround as writing/exercise/streak
+          // services: cast to a permissive type for the
+          // .from().insert() chain. See streak.ts for the full
+          // rationale.
+          const builder = supabase.from('daily_progress').insert({
+            learner_id: userId,
+            activity_date: today,
+            cards_reviewed: 1,
+          }) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+          const r = await builder.abortSignal(signal);
+          if (r.error) throw r.error;
+        },
+        5_000,
+        'vocabularyService: insertDailyProgress',
+      );
 
       // streak handled centrally below (decoupled from daily_progress)
-    } else if (progress) {
-      await supabase
-        .from('daily_progress')
-        .update({ cards_reviewed: progress.cards_reviewed + 1 })
-        .eq('id', progress.id);
+    } else {
+      await withTimeout(
+        async (signal) => {
+          const builder = supabase
+            .from('daily_progress')
+            .update({ cards_reviewed: progress.cards_reviewed + 1 })
+            .eq('id', progress.id) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+          const r = await builder.abortSignal(signal);
+          if (r.error) throw r.error;
+        },
+        5_000,
+        'vocabularyService: updateDailyProgress',
+      );
     }
 
     // Streak handled centrally (any-activity, reset-on-gap), decoupled from daily_progress

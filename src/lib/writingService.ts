@@ -3,6 +3,7 @@ import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 import { recordActivity } from './streak';
 import { isValidWritingFeedback } from './llmValidation';
+import { withTimeout } from './timeout';
 
 export interface WritingFeedbackError {
   original: string;
@@ -287,40 +288,100 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
   } else {
     // Save to writing_submissions table in Supabase
     try {
-      const { data: dbData, error: dbError } = await supabase
-        .from('writing_submissions')
-        .insert({
-          learner_id: userId,
-          prompt,
-          content,
-          word_count: wordCount,
-          ai_feedback: aiFeedback,
-        })
-        .select('*')
-        .single();
+      // CH7 (2026-06-07, P3-#22): wrap the writing_submissions
+      // insert + daily_progress read+update in withTimeout so a
+      // slow / hung Supabase backend cannot leave the Writing
+      // page in `submitting=true` forever. The other DB-touching
+      // services (DashboardPage, ExercisePage) already use
+      // withTimeout for their daily_progress calls; writing
+      // was the outlier. The writing_submissions insert also has
+      // a timeout now (8s) to bound the critical-path wait.
+      const { data: dbData, error: dbError } = await withTimeout(
+        async (signal) => {
+          const res = await supabase
+            .from('writing_submissions')
+            .insert({
+              learner_id: userId,
+              prompt,
+              content,
+              word_count: wordCount,
+              ai_feedback: aiFeedback,
+            })
+            .select('*')
+            .abortSignal(signal)
+            .single();
+          return res;
+        },
+        8_000,
+        'writingService: insertSubmission',
+      );
 
       if (dbError) throw dbError;
 
       // Increment daily progress in Supabase
       const today = now.split('T')[0];
-      const { data: progress, error: progErr } = await supabase
-        .from('daily_progress')
-        .select('*')
-        .eq('learner_id', userId)
-        .eq('activity_date', today)
-        .single();
+      const progress = await withTimeout(
+        async (signal) => {
+          const res = await supabase
+            .from('daily_progress')
+            .select('*')
+            .eq('learner_id', userId)
+            .eq('activity_date', today)
+            .abortSignal(signal)
+            .single();
+          // PGRST116 = row not found, perfectly fine here (will
+          // create a new row below).
+          if (res.error && res.error.code !== 'PGRST116') throw res.error;
+          return res.data;
+        },
+        5_000,
+        'writingService: readDailyProgress',
+      );
 
-      if (!progErr && progress) {
-        await supabase
-          .from('daily_progress')
-          .update({ writing_count: (progress.writing_count || 0) + 1 })
-          .eq('id', progress.id);
+      if (progress) {
+        await withTimeout(
+          async (signal) => {
+            // CH7 (2026-06-07, P3-#22): the @supabase/postgrest-js
+            // 2.106.0 typing here widens the builder type back
+            // to PostgrestBuilder after the `.update()`/`.eq()`
+            // chain, which doesn't expose .abortSignal() in the
+            // public type even though it IS supported at
+            // runtime. The existing call sites in
+            // aiConfigService.ts dodge this because they use
+            // .select() (which returns PostgrestFilterBuilder).
+            // Cast to a permissive type so the TS check passes
+            // while preserving the runtime behavior.
+            const builder = supabase
+              .from('daily_progress')
+              .update({ writing_count: (progress.writing_count || 0) + 1 })
+              .eq('id', progress.id) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+            const r = await builder.abortSignal(signal);
+            if (r.error) throw r.error;
+          },
+          5_000,
+          'writingService: updateDailyProgress',
+        );
       } else {
-        await supabase.from('daily_progress').insert({
-          learner_id: userId,
-          activity_date: today,
-          writing_count: 1,
-        });
+        await withTimeout(
+          async (signal) => {
+            // Same typing workaround as updateDailyProgress
+            // above. @supabase/postgrest-js 2.106.0 widens the
+            // builder type to PostgrestBuilder after the
+            // .from().insert() chain, hiding .abortSignal()
+            // from the public type even though it works at
+            // runtime. Cast to a permissive type to keep the
+            // runtime abort behavior.
+            const builder = supabase.from('daily_progress').insert({
+              learner_id: userId,
+              activity_date: today,
+              writing_count: 1,
+            }) as unknown as { abortSignal: (s: AbortSignal) => Promise<{ error: { message: string } | null }> };
+            const r = await builder.abortSignal(signal);
+            if (r.error) throw r.error;
+          },
+          5_000,
+          'writingService: insertDailyProgress',
+        );
       }
 
       // Streak: any learning activity counts (centralized)

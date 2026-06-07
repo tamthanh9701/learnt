@@ -188,7 +188,7 @@ export const WritingPage: React.FC = () => {
                   disabled={submitting || wordCount < 10}
                 >
                   <Sparkles size={16} />
-                  <span>{submitting ? (isEn ? 'Analyzing...' : 'Đang phân tích...') : (isEn ? 'Get AI Feedback' : 'Nhận nhận xét AI')}</span>
+                  <span>{submitting ? (isEn ? 'Analyzing...' : 'Đang phân tích...') : (isEn ? 'Get AI Feedback' : 'Nhận xét AI')}</span>
                 </button>
               </div>
             </form>

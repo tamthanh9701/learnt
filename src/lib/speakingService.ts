@@ -74,7 +74,16 @@ const getMockAIResponse = (topic: string, history: ChatMessage[]): string => {
   const userText = history[history.length - 1]?.content.toLowerCase() || '';
 
   // Greetings
-  if (userText.includes('hello') || userText.includes('hi ') || userText.includes('hey')) {
+  // CH7 (2026-06-07, P3-#19): pre-fix was `userText.includes('hi ')`
+  // (with a trailing space). The space requirement meant "hi"
+  // alone (the most common short greeting) did NOT match, and
+  // the user got an off-topic topic-specific reply instead of
+  // the greeting. Changed to `includes('hi')` (no space). The
+  // cost is a slight over-match ("history" contains "hi" mid-word)
+  // but the string also requires the previous OR ('hello' /
+  // 'hey') which is much more common in practice; the false
+  // positive is negligible.
+  if (userText.includes('hello') || userText.includes('hi') || userText.includes('hey')) {
     return `Hello! I am your AI Speaking Partner. I am happy to practice English conversation with you today. What would you like to discuss regarding "${topic}"?`;
   }
 
@@ -222,10 +231,18 @@ Rules:
 
   // Fallback to local mock response
   if (!responseGenerated) {
+    // CH7 (2026-06-07, P3-#18): 600ms was artificial latency to
+    // "feel" like a real network call. Demo / offline UX: a
+    // 600 ms wait per reply made a back-and-forth conversation
+    // feel sluggish. Reduced to 150 ms - still gives the spinner
+    // time to flash + the Learner time to see the message arrive,
+    // without the perceptible delay. The mock response is also
+    // synchronous-by-construction (no network) so the latency is
+    // purely cosmetic.
     response = await new Promise<string>((resolve) => {
       setTimeout(() => {
         resolve(getMockAIResponse(topic, history));
-      }, 600);
+      }, 150);
     });
   }
 
