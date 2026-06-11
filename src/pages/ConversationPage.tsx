@@ -6,6 +6,7 @@ import { useAI } from '../contexts/AIContext';
 import { PROVIDER_LABELS } from '../lib/aiClient';
 import { fetchAIConversationResponse, fetchSpeakingSessionsHistory, streamAIConversationResponse } from '../lib/speakingService';
 import { supportsStreaming } from '../lib/aiClient';
+import { mergeSpeechTranscript } from '../lib/speechInput';
 import type { ChatMessage } from '../lib/speakingService';
 import { isCompleteFeedback } from '../lib/aiFeedback';
 import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
@@ -53,6 +54,12 @@ export const ConversationPage: React.FC = () => {
   const inputTextRef = useRef('');
   const submittingRef = useRef(false);
   const sendMessageRef = useRef<(() => void) | null>(null);
+  // Text typed BEFORE the current listening session started. The recognizer's
+  // onResult carries the FULL accumulated transcript on every finalized chunk
+  // (continuous mode), so we REPLACE the speech portion onto this base instead
+  // of appending each time — otherwise each chunk re-appends the whole
+  // accumulation and words duplicate ("hello hello world").
+  const baseTextRef = useRef('');
 
   const { speak, cancel } = useSpeechSynthesis();
   const {
@@ -65,8 +72,15 @@ export const ConversationPage: React.FC = () => {
     continuous: true,
     interimResults: true,
     silenceTimeoutMs: autoSend ? silenceMs : 0,
-    onStart: () => setSpeechError(null),
-    onResult: (transcript) => setInputText(prev => (prev ? prev + ' ' + transcript : transcript)),
+    onStart: () => {
+      setSpeechError(null);
+      // Snapshot whatever is already in the box so speech is appended once,
+      // then replaced as the accumulation grows (no per-chunk duplication).
+      baseTextRef.current = inputTextRef.current.trim();
+    },
+    onResult: (transcript) => {
+      setInputText(mergeSpeechTranscript(baseTextRef.current, transcript));
+    },
     onError: (code) => setSpeechError(t(getSpeechErrorMessageKey(code))),
     onSilence: () => {
       // VAD elapsed: auto-send the current turn if there is text to send and we
