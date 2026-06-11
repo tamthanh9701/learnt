@@ -242,6 +242,129 @@ export async function testAIConnection(config: AIConfig): Promise<string> {
 }
 
 // ---------------------------------------------------------------------------
+// Streaming (Live v2 — pseudo-live conversation)
+// ---------------------------------------------------------------------------
+
+/** Called with each newly-arrived text delta during a streaming reply. */
+export type StreamHandler = (delta: string) => void;
+
+/**
+ * Stream a Gemini reply token-by-token, invoking `onDelta` with each text
+ * fragment as it arrives, and resolving with the full concatenated text.
+ *
+ * Gemini's streamGenerateContent with `alt=sse` returns Server-Sent Events;
+ * each `data:` line is a partial GenerateContentResponse whose
+ * candidates[0].content.parts[].text is the delta. We parse line-by-line off
+ * the fetch body reader. Bounded by AbortController like the non-stream path.
+ *
+ * Only implemented for Gemini (the project's primary provider). Callers should
+ * fall back to the non-streaming `callAIProvider` for other providers.
+ */
+export async function streamGemini(
+  config: AIConfig,
+  messages: ChatMessage[],
+  onDelta: StreamHandler,
+  timeoutMs: number = FETCH_TIMEOUT_MS,
+): Promise<string> {
+  const systemInstruction = messages.find((m) => m.role === 'system')?.content;
+  const contents = messages
+    .filter((m) => m.role !== 'system')
+    .map((m) => ({
+      role: m.role === 'assistant' ? 'model' : 'user',
+      parts: [{ text: m.content }],
+    }));
+
+  const body: Record<string, unknown> = {
+    contents,
+    generationConfig: { temperature: 0.7, maxOutputTokens: 2048 },
+  };
+  if (systemInstruction) {
+    body.systemInstruction = { parts: [{ text: systemInstruction }] };
+  }
+
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${config.model}:streamGenerateContent?alt=sse`;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-goog-api-key': config.apiKey,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err: unknown) {
+    clearTimeout(timer);
+    if (err instanceof DOMException && err.name === 'AbortError') {
+      throw new TimeoutError('Gemini (stream)', timeoutMs);
+    }
+    throw err;
+  }
+
+  if (!res.ok || !res.body) {
+    clearTimeout(timer);
+    const errText = await res.text().catch(() => '');
+    throw new Error(`Gemini stream error (${res.status}): ${errText}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let full = '';
+
+  const handleLine = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data:')) return;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === '[DONE]') return;
+    try {
+      const json = JSON.parse(payload);
+      const parts = json?.candidates?.[0]?.content?.parts;
+      if (Array.isArray(parts)) {
+        for (const p of parts) {
+          const text = p?.text;
+          if (typeof text === 'string' && text.length > 0) {
+            full += text;
+            onDelta(text);
+          }
+        }
+      }
+    } catch {
+      // Partial / non-JSON keepalive line — ignore.
+    }
+  };
+
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl = buffer.indexOf('\n');
+      while (nl !== -1) {
+        handleLine(buffer.slice(0, nl));
+        buffer = buffer.slice(nl + 1);
+        nl = buffer.indexOf('\n');
+      }
+    }
+    if (buffer.length > 0) handleLine(buffer);
+  } finally {
+    clearTimeout(timer);
+  }
+
+  if (!full) throw new Error('Empty stream response from Gemini');
+  return full;
+}
+
+/** True when the provider supports the streaming path (`streamGemini`). */
+export function supportsStreaming(config: AIConfig): boolean {
+  return config.provider === 'gemini' && !!config.apiKey && !!config.model;
+}
+
+// ---------------------------------------------------------------------------
 // Model lists per provider (for Settings UI)
 // ---------------------------------------------------------------------------
 

@@ -4,7 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { PROVIDER_LABELS } from '../lib/aiClient';
-import { fetchAIConversationResponse, fetchSpeakingSessionsHistory } from '../lib/speakingService';
+import { fetchAIConversationResponse, fetchSpeakingSessionsHistory, streamAIConversationResponse } from '../lib/speakingService';
+import { supportsStreaming } from '../lib/aiClient';
 import type { ChatMessage } from '../lib/speakingService';
 import { isCompleteFeedback } from '../lib/aiFeedback';
 import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
@@ -38,6 +39,21 @@ export const ConversationPage: React.FC = () => {
 
   const isEn = locale === 'en';
 
+  // Pseudo-live (Live v1): when auto-send is on, a pause in speech (VAD silence
+  // timer) finalizes the turn and sends it — no manual Send press. The Learner
+  // can toggle it off and adjust the pause length (slow/hesitant speakers).
+  const [autoSend, setAutoSend] = useState(true);
+  const [silenceMs, setSilenceMs] = useState(1800);
+  // Live v2: stream the reply + speak it sentence-by-sentence ("speaks as it
+  // thinks"). Only offered when the provider supports streaming (Gemini); the
+  // trade-off is no structured feedback card on streamed turns (see PRD).
+  const [streamReply, setStreamReply] = useState(false);
+  // Refs so the recognizer's onSilence callback always sees the freshest input
+  // + send function without re-instantiating the recognition instance.
+  const inputTextRef = useRef('');
+  const submittingRef = useRef(false);
+  const sendMessageRef = useRef<(() => void) | null>(null);
+
   const { speak, cancel } = useSpeechSynthesis();
   const {
     isListening,
@@ -48,9 +64,17 @@ export const ConversationPage: React.FC = () => {
     lang: 'en-US',
     continuous: true,
     interimResults: true,
+    silenceTimeoutMs: autoSend ? silenceMs : 0,
     onStart: () => setSpeechError(null),
     onResult: (transcript) => setInputText(prev => (prev ? prev + ' ' + transcript : transcript)),
     onError: (code) => setSpeechError(t(getSpeechErrorMessageKey(code))),
+    onSilence: () => {
+      // VAD elapsed: auto-send the current turn if there is text to send and we
+      // are not already awaiting a reply. Guarded by refs to dodge stale state.
+      if (autoSend && !submittingRef.current && inputTextRef.current.trim()) {
+        sendMessageRef.current?.();
+      }
+    },
   });
 
   const toggleFeedback = (index: number) => {
@@ -86,6 +110,14 @@ export const ConversationPage: React.FC = () => {
     loadSession();
   }, [user, sessionId, isMock]);
 
+  // Keep VAD-callback refs fresh without re-instantiating the recognizer.
+  useEffect(() => {
+    inputTextRef.current = inputText;
+  }, [inputText]);
+  useEffect(() => {
+    submittingRef.current = submitting;
+  }, [submitting]);
+
   const handleSendMessage = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (!user || !inputText.trim() || submitting) return;
@@ -106,16 +138,49 @@ export const ConversationPage: React.FC = () => {
     setMessages(updatedHistory);
     setSubmitting(true);
 
-    try {
-      const aiReply = await fetchAIConversationResponse(user.id, topic, updatedHistory, isMock, aiConfig);
-      
-      setMessages(prev => [
-        ...prev,
-        { role: 'assistant', content: aiReply, timestamp: new Date().toISOString() }
-      ]);
+    const canStream = streamReply && !isMock && supportsStreaming(aiConfig);
 
-      // Automatically speak the AI response
-      speak(aiReply);
+    try {
+      if (canStream) {
+        // Live v2: stream a plain-text reply and speak each sentence as it
+        // completes. We append one assistant bubble and grow its content as
+        // deltas arrive. Persist the full reply once streaming ends.
+        const replyTs = new Date().toISOString();
+        setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: replyTs }]);
+        const full = await streamAIConversationResponse(
+          topic,
+          updatedHistory,
+          aiConfig,
+          (sentence) => {
+            // Speak each complete sentence the moment it arrives.
+            speak(sentence);
+            setMessages(prev => {
+              const copy = [...prev];
+              const last = copy[copy.length - 1];
+              if (last && last.role === 'assistant') {
+                copy[copy.length - 1] = {
+                  ...last,
+                  content: (last.content ? last.content + ' ' : '') + sentence,
+                };
+              }
+              return copy;
+            });
+          },
+        );
+        // NOTE (v2 limitation, see PRD): streamed turns are not yet persisted to
+        // speaking_sessions — streaming prioritises low-latency speech. A
+        // dedicated persist path is planned; until then the streamed reply lives
+        // in the on-screen session only. `full` is the completed reply text.
+        void full;
+      } else {
+        const aiReply = await fetchAIConversationResponse(user.id, topic, updatedHistory, isMock, aiConfig);
+        setMessages(prev => [
+          ...prev,
+          { role: 'assistant', content: aiReply, timestamp: new Date().toISOString() }
+        ]);
+        // Automatically speak the AI response
+        speak(aiReply);
+      }
     } catch (err) {
       console.error('Error getting AI reply:', err);
       setReplyError(true);
@@ -123,6 +188,12 @@ export const ConversationPage: React.FC = () => {
       setSubmitting(false);
     }
   };
+
+  // Expose the latest send fn to the VAD silence callback (avoids stale closure).
+  // Assigned in an effect (not during render) per the react-hooks/refs rule.
+  useEffect(() => {
+    sendMessageRef.current = () => { void handleSendMessage(); };
+  });
 
   const handleRetryReply = async () => {
     if (!user || submitting || messages.length === 0) return;
@@ -437,6 +508,46 @@ export const ConversationPage: React.FC = () => {
               </div>
             )}
             
+            {recognitionSupported && (
+              <div className="flex align-center gap-sm" style={{ flexWrap: 'wrap' }}>
+                <label className="flex align-center gap-xs body-xs" style={{ cursor: 'pointer' }}>
+                  <input
+                    type="checkbox"
+                    checked={autoSend}
+                    onChange={(e) => setAutoSend(e.target.checked)}
+                    aria-label={isEn ? 'Auto-send after I stop speaking' : 'Tự gửi khi tôi ngừng nói'}
+                  />
+                  <span>{isEn ? 'Auto-send when I pause' : 'Tự gửi khi tôi ngừng nói'}</span>
+                </label>
+                {autoSend && (
+                  <label className="flex align-center gap-xs body-xs" style={{ color: 'var(--text-tertiary)' }}>
+                    <span>{isEn ? 'Pause' : 'Khoảng dừng'}</span>
+                    <input
+                      type="range"
+                      min={800}
+                      max={4000}
+                      step={200}
+                      value={silenceMs}
+                      onChange={(e) => setSilenceMs(Number(e.target.value))}
+                      aria-label={isEn ? 'Silence pause length (ms)' : 'Độ dài khoảng dừng (ms)'}
+                    />
+                    <span>{(silenceMs / 1000).toFixed(1)}s</span>
+                  </label>
+                )}
+                {supportsStreaming(aiConfig) && !isMock && (
+                  <label className="flex align-center gap-xs body-xs" style={{ cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={streamReply}
+                      onChange={(e) => setStreamReply(e.target.checked)}
+                      aria-label={isEn ? 'Speak reply as it streams' : 'Đọc câu trả lời ngay khi tạo'}
+                    />
+                    <span>{isEn ? 'Live reply (no feedback card)' : 'Trả lời trực tiếp (không có thẻ góp ý)'}</span>
+                  </label>
+                )}
+              </div>
+            )}
+
             <form onSubmit={handleSendMessage} className="flex align-center gap-sm">
               {recognitionSupported ? (
                 <button

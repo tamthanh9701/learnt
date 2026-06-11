@@ -28,6 +28,7 @@
 
 import { bandForScore } from './pronunciationHistory';
 import type { PhonemeBand, PhonemeScore, PronunciationAttempt } from './pronunciationHistory';
+import type { WordPhonemes } from './g2p';
 
 /** Identifier of the (no-longer-loaded) in-browser model.
  *  Kept as a docstring-style constant so future contributors know
@@ -142,4 +143,140 @@ export function buildAttempt(
     overall_band: overallBand(overall),
     phonemes: perWord,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Slice 2 — phoneme-level scoring via Needleman-Wunsch alignment.
+//
+// The word-level path above stays for back-compat + as a synchronous fallback.
+// The functions below align the REFERENCE phoneme stream against the SPOKEN
+// phoneme stream (both produced by g2p.ts), so a Learner gets per-phoneme
+// credit — then we map phonemes back onto words for display (the UI shows a
+// badge per word, not per IPA symbol).
+//
+// All pure + deterministic. The async G2P step lives in g2p.ts; these helpers
+// take already-phonemized input so they stay unit-testable with no I/O.
+// ---------------------------------------------------------------------------
+
+/** One aligned cell: reference phoneme vs spoken phoneme (either may be null). */
+export interface AlignedPair {
+  ref: string | null;
+  hyp: string | null;
+  /** true when ref and hyp are a matching phoneme. */
+  match: boolean;
+}
+
+const NW_MATCH = 1;
+const NW_MISMATCH = -1;
+const NW_GAP = -1;
+
+/**
+ * Global sequence alignment (Needleman-Wunsch) of two phoneme streams.
+ * Returns the aligned pair list (substitutions, insertions, deletions explicit)
+ * so the caller can attribute each reference phoneme to a hit/miss. Pure.
+ *
+ * Same dynamic-programming family as the existing `levenshtein`, but it keeps
+ * the traceback so we know WHICH phonemes matched, not just the edit distance.
+ */
+export function needlemanWunsch(ref: string[], hyp: string[]): AlignedPair[] {
+  const m = ref.length;
+  const n = hyp.length;
+  // Score matrix (m+1) x (n+1).
+  const score: number[][] = Array.from({ length: m + 1 }, () =>
+    new Array<number>(n + 1).fill(0),
+  );
+  for (let i = 0; i <= m; i++) score[i][0] = i * NW_GAP;
+  for (let j = 0; j <= n; j++) score[0][j] = j * NW_GAP;
+
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      const diag =
+        score[i - 1][j - 1] + (ref[i - 1] === hyp[j - 1] ? NW_MATCH : NW_MISMATCH);
+      const up = score[i - 1][j] + NW_GAP;
+      const left = score[i][j - 1] + NW_GAP;
+      score[i][j] = Math.max(diag, up, left);
+    }
+  }
+
+  // Traceback from (m,n) to (0,0).
+  const aligned: AlignedPair[] = [];
+  let i = m;
+  let j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0) {
+      const diag =
+        score[i - 1][j - 1] + (ref[i - 1] === hyp[j - 1] ? NW_MATCH : NW_MISMATCH);
+      if (score[i][j] === diag) {
+        const r = ref[i - 1];
+        const h = hyp[j - 1];
+        aligned.push({ ref: r, hyp: h, match: r === h });
+        i -= 1;
+        j -= 1;
+        continue;
+      }
+    }
+    if (i > 0 && score[i][j] === score[i - 1][j] + NW_GAP) {
+      aligned.push({ ref: ref[i - 1], hyp: null, match: false }); // deletion
+      i -= 1;
+      continue;
+    }
+    // insertion
+    aligned.push({ ref: null, hyp: hyp[j - 1], match: false });
+    j -= 1;
+  }
+  aligned.reverse();
+  return aligned;
+}
+
+/**
+ * Score the Learner's spoken phonemes against the reference, attributing the
+ * result back to each reference WORD (phoneme->word mapping for display).
+ *
+ * For each reference word: count how many of its phonemes matched in the
+ * alignment, score = matched / total, banded via bandForScore. A word with no
+ * phonemes (G2P miss) falls back to a neutral 'off' so it is never silently
+ * treated as perfect. Pure given its inputs.
+ */
+export function scorePhonemeWords(
+  refWords: WordPhonemes[],
+  hypWords: WordPhonemes[],
+): { overall: number; perWord: PhonemeScore[] } {
+  const refStream: string[] = [];
+  // Track which word each reference phoneme belongs to.
+  const wordOfPhoneme: number[] = [];
+  refWords.forEach((w, wi) => {
+    for (const p of w.phonemes) {
+      refStream.push(p);
+      wordOfPhoneme.push(wi);
+    }
+  });
+  const hypStream: string[] = [];
+  for (const w of hypWords) hypStream.push(...w.phonemes);
+
+  const aligned = needlemanWunsch(refStream, hypStream);
+
+  // Walk the alignment; for each non-insertion cell (ref !== null) advance a
+  // reference-phoneme cursor and credit its owning word on a match.
+  const matchedPerWord = new Array<number>(refWords.length).fill(0);
+  let refCursor = 0;
+  for (const cell of aligned) {
+    if (cell.ref === null) continue; // insertion: no reference phoneme consumed
+    const wi = wordOfPhoneme[refCursor];
+    if (cell.match && wi !== undefined) matchedPerWord[wi] += 1;
+    refCursor += 1;
+  }
+
+  const perWord: PhonemeScore[] = refWords.map((w, wi) => {
+    const total = w.phonemes.length;
+    const score = total === 0 ? 0 : matchedPerWord[wi] / total;
+    return { phoneme: w.word, score, band: bandForScore(score) };
+  });
+
+  const scored = perWord.filter((_, wi) => refWords[wi].phonemes.length > 0);
+  const overall =
+    scored.length === 0
+      ? 0
+      : scored.reduce((s, p) => s + p.score, 0) / scored.length;
+
+  return { overall, perWord };
 }

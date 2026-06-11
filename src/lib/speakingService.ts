@@ -1,6 +1,8 @@
 import { supabase } from './supabase';
 import { callAIProvider } from './aiClient';
 import type { AIConfig } from './aiClient';
+import { streamGemini, supportsStreaming } from './aiClient';
+import { createSentenceStreamer } from './sentenceStreamer';
 import type { ChatMessage as AIChatMessage } from './aiClient';
 import { parseStructuredReply } from './aiFeedback';
 import type { StructuredFeedback } from './aiFeedback';
@@ -10,6 +12,7 @@ import {
   PRONUNCIATION_TOPIC,
 } from './pronunciationHistory';
 import type { PronunciationAttempt, PronunciationSessionEntry } from './pronunciationHistory';
+import type { CardHistoryStat } from './sentenceSelector';
 import { withTimeout } from './timeout';
 import { recordActivity } from './streak';
 
@@ -347,6 +350,57 @@ Rules:
 };
 
 /**
+ * Streaming conversation responder (Live v2 — pseudo-live).
+ *
+ * Streams a PLAIN-TEXT reply from Gemini and invokes `onSentence` for each
+ * complete sentence as it arrives, so the caller can start TTS on sentence 1
+ * while the model is still generating. Resolves with the full reply text.
+ *
+ * TRADE-OFF (by design, see PRD): the structured per-turn feedback card
+ * (corrected_text/errors) is NOT produced on the streaming path — streaming a
+ * JSON envelope would force TTS to read JSON. Streaming therefore prioritises a
+ * fast, natural spoken reply; the feedback card stays a feature of the
+ * non-streaming `fetchAIConversationResponse`. Callers choose per turn.
+ *
+ * Only runs when the provider supports streaming (Gemini). Throws otherwise so
+ * the caller can fall back to `fetchAIConversationResponse`. Persistence is the
+ * caller's responsibility (same speaking_sessions store) — this function is
+ * purely the transport + sentence segmentation.
+ */
+export const streamAIConversationResponse = async (
+  topic: string,
+  history: ChatMessage[],
+  aiConfig: AIConfig,
+  onSentence: (sentence: string) => void,
+): Promise<string> => {
+  if (!supportsStreaming(aiConfig)) {
+    throw new Error('Streaming not supported for the configured provider');
+  }
+
+  const systemPrompt = `You are a friendly English conversation tutor helping a Vietnamese intermediate learner. The topic is "${topic}". Reply ONLY with a natural, encouraging spoken response of 2-4 sentences, and end with a follow-up question. Plain text only — no markdown, no JSON, no lists.`;
+
+  const messages: AIChatMessage[] = [
+    { role: 'system', content: systemPrompt },
+    ...history.map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content,
+    })),
+  ];
+
+  const streamer = createSentenceStreamer();
+  const full = await streamGemini(aiConfig, messages, (delta) => {
+    for (const sentence of streamer.push(delta)) {
+      onSentence(sentence);
+    }
+  });
+  // Flush any trailing sentence that lacked a terminator.
+  for (const sentence of streamer.flush()) {
+    onSentence(sentence);
+  }
+  return full;
+};
+
+/**
  * Score pronunciation accuracy by comparing spoken transcript with reference text
  */
 export const scorePronunciationSimilarity = (reference: string, transcript: string): {
@@ -472,6 +526,43 @@ export const savePronunciationAttempt = async (
       console.error('Error saving pronunciation attempt to Supabase:', dbErr);
     }
   }
+};
+
+/**
+ * Build a per-card practice-stats map (sourceCardId -> { attempts, meanScore })
+ * from a list of pronunciation attempts. Drives sentence selection (coverage +
+ * mastery) and the "X attempts · Y sentences" counters. Pure transform over the
+ * already-deserialized entries — no I/O.
+ *
+ * meanScore is the average of each attempt's overall phoneme score in [0,1],
+ * or null for a card with no scored attempts. Slice 1 ignores meanScore
+ * (coverage-only); Slice 2 uses it for the mastery signal.
+ */
+export const buildCardHistoryStats = (
+  entries: PronunciationSessionEntry[],
+): Record<string, CardHistoryStat> => {
+  const acc: Record<string, { attempts: number; scoreSum: number; scoreCount: number }> = {};
+  for (const entry of entries) {
+    const cardId = entry.attempt.source_card_id;
+    if (!cardId) continue;
+    if (!acc[cardId]) acc[cardId] = { attempts: 0, scoreSum: 0, scoreCount: 0 };
+    acc[cardId].attempts += 1;
+    const phonemes = entry.attempt.phonemes;
+    if (phonemes.length > 0) {
+      const overall = phonemes.reduce((s, p) => s + p.score, 0) / phonemes.length;
+      acc[cardId].scoreSum += overall;
+      acc[cardId].scoreCount += 1;
+    }
+  }
+  const result: Record<string, CardHistoryStat> = {};
+  for (const cardId of Object.keys(acc)) {
+    const { attempts, scoreSum, scoreCount } = acc[cardId];
+    result[cardId] = {
+      attempts,
+      meanScore: scoreCount > 0 ? scoreSum / scoreCount : null,
+    };
+  }
+  return result;
 };
 
 /**

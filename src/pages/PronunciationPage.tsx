@@ -8,15 +8,23 @@ import { seedFlashcards } from '../data/seedVocabulary';
 import type { SeedFlashcard } from '../data/seedVocabulary';
 import {
   buildAttempt,
+  scorePhonemeWords,
+  overallBand,
 } from '../lib/phonemeScorer';
 import {
   bandForScore,
 } from '../lib/pronunciationHistory';
-import type { PhonemeScore, PronunciationSessionEntry } from '../lib/pronunciationHistory';
+import type { PhonemeScore, PronunciationSessionEntry, PronunciationAttempt } from '../lib/pronunciationHistory';
 import {
   savePronunciationAttempt,
   fetchPronunciationHistory,
+  buildCardHistoryStats,
 } from '../lib/speakingService';
+import {
+  selectNextSentenceIndex,
+  computePracticeCounters,
+} from '../lib/sentenceSelector';
+import type { CardHistoryStat } from '../lib/sentenceSelector';
 import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
 import {
@@ -55,16 +63,6 @@ function buildSeedPool(): PoolItem[] {
 }
 
 const FALLBACK_CHALLENGES: PronunciationChallenge[] = seedPronunciationChallenges;
-
-// BR-19: no immediate repeat. Track the last shown index.
-function pickNext(pool: PoolItem[], lastIdx: number): number {
-  if (pool.length <= 1) return 0;
-  for (let i = 0; i < 8; i++) {
-    const candidate = Math.floor(Math.random() * pool.length);
-    if (candidate !== lastIdx) return candidate;
-  }
-  return (lastIdx + 1) % pool.length;
-}
 
 // ---------------------------------------------------------------------------
 // Page
@@ -110,14 +108,37 @@ export const PronunciationPage: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
-  const [activeIdx, setActiveIdx] = useState<number>(0);
-  // CH7-fix (2026-06-07, P1-#6): removed activeIdxRef (was a stale-
-  // closure escape hatch in handleNext). Now handleNext includes
-  // activeIdx in its deps so the closure reads the freshest value
-  // directly - no ref needed, no render-body writes (which the
-  // React docs warn against).
-
   const useFallback = pool.length === 0;
+
+  const [activeIdx, setActiveIdx] = useState<number>(0);
+  // C/coverage selection (Slice 1): per-card practice stats drive which
+  // sentence shows next, so a visit no longer always replays sentence 1.
+  // History loads async; until it arrives we still pick a RANDOM start (not
+  // index 0) so the "stuck on sentence 1" bug is fixed even on a cold load.
+  const [historyStats, setHistoryStats] = useState<Record<string, CardHistoryStat>>({});
+  const [selectionSeeded, setSelectionSeeded] = useState(false);
+
+  // Candidate list mirrors the active source (seed/generated pool, or the
+  // fallback challenges when the pool is empty), keyed by source card id so
+  // selection + counters line up with saved history.
+  const candidates = useFallback
+    ? FALLBACK_CHALLENGES.map((c) => ({ sourceCardId: c.id, sentence: c.text }))
+    : pool.map((p) => ({ sourceCardId: p.sourceCardId, sentence: p.sentence }));
+
+  // Seed the first sentence once the pool is known. Runs on mount and again if
+  // the async generated-vocab load grows the pool. Coverage-ranked when history
+  // is present; random-but-not-index-0 otherwise (cold-load bug fix).
+  useEffect(() => {
+    if (candidates.length === 0 || selectionSeeded) return;
+    const idx = selectNextSentenceIndex(candidates, {
+      history: historyStats,
+      lastIndex: -1,
+      useMastery: true,
+    });
+    setActiveIdx(idx);
+    setSelectionSeeded(true);
+  }, [candidates, historyStats, selectionSeeded]);
+
   const activeSentence = useFallback
     ? (FALLBACK_CHALLENGES[activeIdx % FALLBACK_CHALLENGES.length]?.text ?? '')
     : pool[activeIdx]?.sentence ?? '';
@@ -136,15 +157,18 @@ export const PronunciationPage: React.FC = () => {
     : null;
 
   const handleNext = useCallback(() => {
-    if (useFallback) {
-      setActiveIdx((prev) => (prev + 1) % FALLBACK_CHALLENGES.length);
-      return;
-    }
-    // BR-19: no immediate repeat. activeIdx is now in deps so the
-    // closure captures the freshest value; no ref needed.
-    const next = pickNext(pool, activeIdx);
-    setActiveIdx(next);
-  }, [pool, useFallback, activeIdx]);
+    // BR-19: no immediate repeat. Coverage-ranked next pick from the
+    // active candidate list (fallback challenges or the vocab pool).
+    const list = useFallback
+      ? FALLBACK_CHALLENGES.map((c) => ({ sourceCardId: c.id, sentence: c.text }))
+      : pool.map((p) => ({ sourceCardId: p.sourceCardId, sentence: p.sentence }));
+    const idx = selectNextSentenceIndex(list, {
+      history: historyStats,
+      lastIndex: activeIdx,
+      useMastery: true,
+    });
+    setActiveIdx(idx);
+  }, [pool, useFallback, activeIdx, historyStats]);
 
   // --- Scoring state ---
   // CH2 (diagnosis 2026-06-06, fix-2): removed the on-device ASR
@@ -168,6 +192,8 @@ export const PronunciationPage: React.FC = () => {
     try {
       const list = await fetchPronunciationHistory(user.id, isMock);
       setHistory(list);
+      // Drive coverage selection + the "X attempts · Y sentences" counters.
+      setHistoryStats(buildCardHistoryStats(list));
     } catch {
       setHistory([]);
     } finally {
@@ -175,6 +201,10 @@ export const PronunciationPage: React.FC = () => {
     }
   }, [user, isMock]);
   useEffect(() => { void loadHistory(); }, [loadHistory]);
+
+  // "X attempts · Y sentences" practice counters (Slice 1), derived from
+  // the same per-card stats that drive selection. Pure, no extra storage.
+  const counters = computePracticeCounters(historyStats);
 
   // --- Speech + speech synth ---
   // CH5 (2026-06-06): destructure `status` too so we can show a
@@ -209,7 +239,37 @@ export const PronunciationPage: React.FC = () => {
   const finalizeAttempt = useCallback(async () => {
     if (!transcript) return;
     const ref = activeSentence;
-    const attempt = buildAttempt(ref, activeSourceCardId, transcript);
+
+    // Slice 2: phoneme-level scoring. Phonemize the reference + the spoken
+    // transcript (lazy G2P), align with Needleman-Wunsch, attribute back to
+    // words. If the G2P engine fails for any reason, fall back to the
+    // synchronous word-level `buildAttempt` so scoring never breaks.
+    let attempt: PronunciationAttempt;
+    try {
+      // Only g2p is dynamically imported — it pulls the heavy `phonemize`
+      // engine, which must stay out of the main bundle (lazy, NFR-11). The
+      // scorer itself is light and statically imported.
+      const g2p = await import('../lib/g2p');
+      const [refWords, hypWords] = await Promise.all([
+        g2p.phonemizeWords(ref),
+        g2p.phonemizeWords(transcript),
+      ]);
+      const refHasPhonemes = refWords.some((w) => w.phonemes.length > 0);
+      if (refHasPhonemes) {
+        const { overall: ov, perWord } = scorePhonemeWords(refWords, hypWords);
+        attempt = {
+          sentence: ref,
+          source_card_id: activeSourceCardId,
+          overall_band: overallBand(ov),
+          phonemes: perWord,
+        };
+      } else {
+        attempt = buildAttempt(ref, activeSourceCardId, transcript);
+      }
+    } catch {
+      attempt = buildAttempt(ref, activeSourceCardId, transcript);
+    }
+
     setPhonemeScores(attempt.phonemes);
     const overallScore = attempt.phonemes.reduce((s, p) => s + p.score, 0) /
       Math.max(1, attempt.phonemes.length);
@@ -459,9 +519,23 @@ export const PronunciationPage: React.FC = () => {
 
       {/* History (BR-13: per-turn persists; BR-20: viewable). */}
       <div className="card" style={{ marginTop: 'var(--spacing-md)' }}>
-        <div className="flex align-center gap-xs" style={{ marginBottom: 'var(--spacing-sm)' }}>
-          <History size={16} className="text-secondary" />
-          <span className="title-xs">{t('speaking.historyTitle')}</span>
+        <div className="flex align-center justify-between gap-xs" style={{ marginBottom: 'var(--spacing-sm)' }}>
+          <div className="flex align-center gap-xs">
+            <History size={16} className="text-secondary" />
+            <span className="title-xs">{t('speaking.historyTitle')}</span>
+          </div>
+          {counters.totalAttempts > 0 && (
+            <span
+              className="body-xs font-semibold"
+              data-testid="practice-counters"
+              style={{ color: 'var(--text-secondary)' }}
+              aria-live="polite"
+            >
+              {isEn
+                ? `${counters.totalAttempts} attempts · ${counters.distinctSentences} sentences`
+                : `${counters.totalAttempts} lượt luyện · ${counters.distinctSentences} câu`}
+            </span>
+          )}
         </div>
         {historyLoading ? (
           <div className="flex align-center gap-xs" role="status" aria-live="polite">

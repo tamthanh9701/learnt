@@ -5,6 +5,7 @@ import type {
   SpeechRecognitionErrorEvent,
   WINDOW_HELPERS,
 } from '../types/speech';
+import { createSilenceTimer, type SilenceTimer } from '../lib/silenceTimer';
 
 /** Map a Web Speech recognition error code to an i18n message key. */
 export function getSpeechErrorMessageKey(code: string): string {
@@ -39,6 +40,20 @@ export interface UseSpeechRecognitionOptions {
   onInterim?: (interimTranscript: string) => void;
   onError?: (errorCode: string) => void;
   onEnd?: () => void;
+  /**
+   * VAD (pseudo-live, Live v1). When set (> 0), the hook starts a silence timer
+   * after each speech result; if no new result arrives within this many ms while
+   * still listening, `onSilence` fires with the accumulated final transcript.
+   * This lets a caller auto-send a turn when the Learner stops talking, without
+   * a manual Send button. Optional — omit to keep the classic manual behavior.
+   */
+  silenceTimeoutMs?: number;
+  /**
+   * Fires once when the silence timer elapses (VAD). Carries the final
+   * accumulated transcript at that moment. The hook also stops listening, so
+   * `onEnd` follows naturally. Only meaningful with `silenceTimeoutMs`.
+   */
+  onSilence?: (finalTranscript: string) => void;
 }
 
 export interface UseSpeechRecognitionReturn {
@@ -71,6 +86,38 @@ export function useSpeechRecognition(
   // Accumulates finalized (isFinal) text across `continuous` result events so the
   // authoritative transcript is the full final accumulation, not just the last chunk.
   const finalAccumRef = useRef('');
+  // VAD silence timer (Live v1). Pure scheduler from lib/silenceTimer, fed by
+  // the recognizer's result events. Re-created when the timeout option changes.
+  const silenceTimerRef = useRef<SilenceTimer | null>(null);
+
+  const clearSilenceTimer = () => {
+    silenceTimerRef.current?.cancel();
+  };
+
+  // (Re)arm the VAD silence timer if configured. Called after each result so a
+  // pause longer than silenceTimeoutMs auto-finalizes the turn.
+  const armSilenceTimer = () => {
+    const ms = optsRef.current.silenceTimeoutMs ?? 0;
+    if (ms <= 0) return;
+    // Rebuild the timer each arm so it always uses the freshest timeout +
+    // callbacks via optsRef, without re-instantiating the recognizer.
+    silenceTimerRef.current?.cancel();
+    silenceTimerRef.current = createSilenceTimer({
+      timeoutMs: ms,
+      onElapse: () => {
+        const finalText = finalAccumRef.current.trim();
+        if (finalText.length > 0) {
+          optsRef.current.onSilence?.(finalText);
+        }
+        try {
+          recognitionRef.current?.stop();
+        } catch {
+          // already stopped — safe to ignore
+        }
+      },
+    });
+    silenceTimerRef.current.bump();
+  };
 
   // Keep the latest callbacks/options without re-creating the instance.
   useEffect(() => {
@@ -122,6 +169,9 @@ export function useSpeechRecognition(
         setInterimTranscript(liveInterim);
         optsRef.current.onInterim?.(liveInterim);
 
+        // VAD: any speech activity (interim or final) re-arms the silence timer.
+        armSilenceTimer();
+
         // Emit the accumulated final transcript whenever a chunk finalized this
         // event. Back-compat: in single-shot mode (interimResults/continuous off)
         // every event yields exactly one isFinal result, so this fires once with
@@ -137,6 +187,7 @@ export function useSpeechRecognition(
         }
       };
       recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
+        clearSilenceTimer();
         optsRef.current.onError?.(event.error || 'error');
         setInterimTranscript('');
         setIsListening(false);
@@ -144,6 +195,7 @@ export function useSpeechRecognition(
       recognition.onend = () => {
         // Interim is provisional; on stop the last final accumulation is
         // authoritative, so clear the live interim display.
+        clearSilenceTimer();
         setInterimTranscript('');
         setIsListening(false);
         optsRef.current.onEnd?.();
@@ -153,6 +205,10 @@ export function useSpeechRecognition(
     } catch {
       setIsSupported(false);
     }
+    // Clean up any pending VAD timer when the hook unmounts.
+    return () => {
+      clearSilenceTimer();
+    };
   }, []);
 
   const start = () => {
