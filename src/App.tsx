@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, lazy, Suspense } from 'react';
 import { HashRouter as Router, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider, useLanguage } from './contexts/LanguageContext';
@@ -7,15 +7,18 @@ import { AIConfigProvider } from './contexts/AIContext';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { Sidebar } from './components/layout/Sidebar';
 import { LoginPage } from './pages/LoginPage';
-import { DashboardPage } from './pages/DashboardPage';
-import { VocabularyPage } from './pages/VocabularyPage';
-import { ReviewPage } from './pages/ReviewPage';
-import { SpeakingPage } from './pages/SpeakingPage';
-import { ConversationPage } from './pages/ConversationPage';
-import { PronunciationPage } from './pages/PronunciationPage';
-import { WritingPage } from './pages/WritingPage';
-import { ExercisePage } from './pages/ExercisePage';
-import { SettingsPage } from './pages/SettingsPage';
+
+// Route-level code splitting keeps the initial bundle small; the heavy
+// Pronunciation phoneme/TTS path only loads when a Learner opens that screen.
+const DashboardPage = lazy(() => import('./pages/DashboardPage').then(m => ({ default: m.DashboardPage })));
+const VocabularyPage = lazy(() => import('./pages/VocabularyPage').then(m => ({ default: m.VocabularyPage })));
+const ReviewPage = lazy(() => import('./pages/ReviewPage').then(m => ({ default: m.ReviewPage })));
+const SpeakingPage = lazy(() => import('./pages/SpeakingPage').then(m => ({ default: m.SpeakingPage })));
+const ConversationPage = lazy(() => import('./pages/ConversationPage').then(m => ({ default: m.ConversationPage })));
+const PronunciationPage = lazy(() => import('./pages/PronunciationPage').then(m => ({ default: m.PronunciationPage })));
+const WritingPage = lazy(() => import('./pages/WritingPage').then(m => ({ default: m.WritingPage })));
+const ExercisePage = lazy(() => import('./pages/ExercisePage').then(m => ({ default: m.ExercisePage })));
+const SettingsPage = lazy(() => import('./pages/SettingsPage').then(m => ({ default: m.SettingsPage })));
 
 // Inner app that handles Auth routing
 const AppContent: React.FC = () => {
@@ -50,19 +53,21 @@ const AppContent: React.FC = () => {
       </button>
       <Sidebar />
       <main id="main-content" className="main-content-layout" tabIndex={-1} ref={mainRef}>
-        <Routes>
-          <Route path="/" element={<DashboardPage />} />
-          <Route path="/vocabulary" element={<VocabularyPage />} />
-          <Route path="/vocabulary/review" element={<ReviewPage />} />
-          <Route path="/speaking" element={<SpeakingPage />} />
-          <Route path="/speaking/conversation" element={<ConversationPage />} />
-          <Route path="/speaking/pronunciation" element={<PronunciationPage />} />
-          <Route path="/writing" element={<WritingPage />} />
-          <Route path="/writing/exercise" element={<ExercisePage />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          {/* Fallback to Dashboard */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+        <Suspense fallback={<div className="flex justify-center align-center" style={{ minHeight: '50vh' }}><div className="spinner" /></div>}>
+          <Routes>
+            <Route path="/" element={<DashboardPage />} />
+            <Route path="/vocabulary" element={<VocabularyPage />} />
+            <Route path="/vocabulary/review" element={<ReviewPage />} />
+            <Route path="/speaking" element={<SpeakingPage />} />
+            <Route path="/speaking/conversation" element={<ConversationPage />} />
+            <Route path="/speaking/pronunciation" element={<PronunciationPage />} />
+            <Route path="/writing" element={<WritingPage />} />
+            <Route path="/writing/exercise" element={<ExercisePage />} />
+            <Route path="/settings" element={<SettingsPage />} />
+            {/* Fallback to Dashboard */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
     </div>
   );
