@@ -104,6 +104,26 @@ function errorResponse(
   return jsonResponse(status, { error: { code, message } }, extraHeaders);
 }
 
+/** Parse a Gemini JSON text payload. Gemini is called with
+ *  responseMimeType "application/json" + a responseSchema, so `raw`
+ *  SHOULD already be valid JSON, but it MIGHT occasionally arrive
+ *  wrapped in ```json markdown fences. Strip fences if present, then
+ *  JSON.parse. Returns undefined if parsing throws — the caller maps
+ *  that to a clean ai_failed rather than emitting a malformed 200.
+ *  Kept LOCAL to this Edge function (separate deploy unit; imports
+ *  nothing from src/). */
+function parseGeminiJson(raw: string): unknown {
+  let s = raw.trim();
+  if (s.startsWith("```")) {
+    s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Request validation
 // ---------------------------------------------------------------------------
@@ -131,17 +151,11 @@ function validateBody(raw: unknown): { ok: true; value: ParsedRequest } | { ok: 
 // Gemini call
 // ---------------------------------------------------------------------------
 
-interface GeminiOutcome {
-  kind: "ok";
-  text: string;
-} | {
-  kind: "rate_limited";
-  retryAfter: string | null;
-} | {
-  kind: "upstream_timeout";
-} | {
-  kind: "failed";
-}
+type GeminiOutcome =
+  | { kind: "ok"; text: string }
+  | { kind: "rate_limited"; retryAfter: string | null }
+  | { kind: "upstream_timeout" }
+  | { kind: "failed" };
 
 async function callGemini(apiKey: string, topicId: string): Promise<GeminiOutcome> {
   const systemPrompt = `You are an English language exercise generator. Generate exactly 3 exercises for the topic "${topicId}". Return a JSON array (no markdown fences) with this structure:
@@ -294,11 +308,19 @@ async function handler(req: Request): Promise<Response> {
   const outcome = await callGemini(apiKey, validated.value.topic_id);
 
   switch (outcome.kind) {
-    case "ok":
-      // The client (exerciseService.ts:213) checks
-      // `isValidExerciseList(data?.questions)`. The Gemini call
-      // returns the array directly, so wrap it in { questions: [...] }.
-      return jsonResponse(200, { questions: outcome.text });
+    case "ok": {
+      // Contract (header line 17) is { questions: ExerciseQuestion[] }, an
+      // ARRAY. outcome.text is the raw Gemini JSON string, so parse it
+      // server-side before wrapping. If it fails to parse or is the wrong
+      // shape (not an array), return ai_failed instead of a bad 200 so the
+      // client falls cleanly to its next tier (seed/inline) rather than
+      // rejecting a malformed payload via isValidExerciseList.
+      const questions = parseGeminiJson(outcome.text);
+      if (!Array.isArray(questions)) {
+        return errorResponse(500, "ai_failed", "Exercise-generation AI returned an unparseable response");
+      }
+      return jsonResponse(200, { questions });
+    }
     case "rate_limited":
       return errorResponse(
         429,

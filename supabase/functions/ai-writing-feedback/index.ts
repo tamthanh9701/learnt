@@ -115,6 +115,26 @@ function errorResponse(
   return jsonResponse(status, { error: { code, message } }, extraHeaders);
 }
 
+/** Parse a Gemini JSON text payload. Gemini is called with
+ *  responseMimeType "application/json" + a responseSchema, so `raw`
+ *  SHOULD already be valid JSON, but it MIGHT occasionally arrive
+ *  wrapped in ```json markdown fences. Strip fences if present, then
+ *  JSON.parse. Returns undefined if parsing throws — the caller maps
+ *  that to a clean ai_failed rather than emitting a malformed 200.
+ *  Kept LOCAL to this Edge function (separate deploy unit; imports
+ *  nothing from src/). */
+function parseGeminiJson(raw: string): unknown {
+  let s = raw.trim();
+  if (s.startsWith("```")) {
+    s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  }
+  try {
+    return JSON.parse(s);
+  } catch {
+    return undefined;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Request validation
 // ---------------------------------------------------------------------------
@@ -156,17 +176,11 @@ function validateBody(raw: unknown): { ok: true; value: ParsedRequest } | { ok: 
 // Gemini call
 // ---------------------------------------------------------------------------
 
-interface GeminiOutcome {
-  kind: "ok";
-  text: string;
-} | {
-  kind: "rate_limited";
-  retryAfter: string | null;
-} | {
-  kind: "upstream_timeout";
-} | {
-  kind: "failed";
-}
+type GeminiOutcome =
+  | { kind: "ok"; text: string }
+  | { kind: "rate_limited"; retryAfter: string | null }
+  | { kind: "upstream_timeout" }
+  | { kind: "failed" };
 
 async function callGemini(apiKey: string, prompt: string, content: string): Promise<GeminiOutcome> {
   const systemPrompt =
@@ -296,8 +310,19 @@ async function handler(req: Request): Promise<Response> {
   const outcome = await callGemini(apiKey, prompt, content);
 
   switch (outcome.kind) {
-    case "ok":
-      return jsonResponse(200, { feedback: outcome.text });
+    case "ok": {
+      // Contract (header line 16) is { feedback: WritingFeedback }, an
+      // OBJECT. outcome.text is the raw Gemini JSON string, so parse it
+      // server-side before wrapping. If it fails to parse or is the wrong
+      // shape (not a plain object), return ai_failed instead of a bad 200
+      // so the client falls cleanly to its next tier rather than rejecting
+      // a malformed payload and silently dropping to mock.
+      const feedback = parseGeminiJson(outcome.text);
+      if (typeof feedback !== "object" || feedback === null || Array.isArray(feedback)) {
+        return errorResponse(500, "ai_failed", "Writing-feedback AI returned an unparseable response");
+      }
+      return jsonResponse(200, { feedback });
+    }
     case "rate_limited":
       return errorResponse(
         429,
