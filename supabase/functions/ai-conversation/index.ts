@@ -182,17 +182,11 @@ function validateBody(raw: unknown): { ok: true; value: ParsedRequest } | { ok: 
 // Gemini call (A10 SSRF-safe: host hardcoded)
 // ---------------------------------------------------------------------------
 
-interface GeminiOutcome {
-  kind: "ok";
-  text: string;
-} | {
-  kind: "rate_limited";
-  retryAfter: string | null;
-} | {
-  kind: "upstream_timeout";
-} | {
-  kind: "failed";
-}
+type GeminiOutcome =
+  | { kind: "ok"; text: string }
+  | { kind: "rate_limited"; retryAfter: string | null }
+  | { kind: "upstream_timeout" }
+  | { kind: "failed" };
 
 async function callGemini(apiKey: string, systemPrompt: string, history: Array<{ role: string; content: string }>): Promise<GeminiOutcome> {
   // Gemini message format: separate systemInstruction from contents,
