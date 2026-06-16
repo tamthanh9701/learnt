@@ -24,6 +24,11 @@
 // ephemeral token) would slot in under supabase/functions/, reusing the SAME verify_jwt
 // + server-side-key posture. Out of scope for Phase B (turn-based).
 
+import { CORS_HEADERS } from "../_shared/cors.ts";
+import { jsonResponse, errorResponse } from "../_shared/http.ts";
+import { getApiKey } from "../_shared/apiKey.ts";
+import { postGemini } from "../_shared/gemini.ts";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -55,45 +60,12 @@ const UPSTREAM_TIMEOUT_MS = 9_000;
 
 const GEMINI_TTS_HOST = "https://generativelanguage.googleapis.com";
 
-// CORS — browser calls this cross-origin from the Vercel-hosted SPA.
-// Authorization is required (verify_jwt); allow it through preflight.
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
 type ErrorCode =
   | "bad_request"
   | "unauthorized"
   | "rate_limited"
   | "tts_failed"
   | "upstream_timeout";
-
-// ---------------------------------------------------------------------------
-// Response helpers
-// ---------------------------------------------------------------------------
-
-function jsonResponse(status: number, body: unknown, extraHeaders?: Record<string, string>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      ...CORS_HEADERS,
-      ...(extraHeaders ?? {}),
-    },
-  });
-}
-
-/** Sanitized error body — NEVER contains the API key, raw audio, or PII (NFR-24/35). */
-function errorResponse(
-  status: number,
-  code: ErrorCode,
-  message: string,
-  extraHeaders?: Record<string, string>,
-): Response {
-  return jsonResponse(status, { error: { code, message } }, extraHeaders);
-}
 
 // ---------------------------------------------------------------------------
 // Request validation (A03/A04 server-side validation)
@@ -159,7 +131,6 @@ type TtsOutcome =
 async function synthesize(apiKey: string, text: string, voice: string): Promise<TtsOutcome> {
   // Mirrors the existing aiClient.callGemini request style (x-goog-api-key header,
   // generativelanguage v1beta) — but the key comes from Deno.env, never the client.
-  const url = `${GEMINI_TTS_HOST}/v1beta/models/${TTS_MODEL}:generateContent`;
   const body = {
     contents: [{ parts: [{ text }] }],
     generationConfig: {
@@ -172,52 +143,20 @@ async function synthesize(apiKey: string, text: string, voice: string): Promise<
     },
   };
 
-  // Server-side timeout via AbortController -> 504 (never hang the connection).
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      return { kind: "upstream_timeout" };
-    }
-    // Network / DNS / TLS error — sanitized, no key, no detail leak.
-    return { kind: "failed" };
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (res.status === 429) {
-    // Propagate upstream rate limit + Retry-After passthrough (contract 429).
-    return { kind: "rate_limited", retryAfter: res.headers.get("Retry-After") };
-  }
-
-  if (!res.ok) {
-    // Drain body so the connection is reusable; do NOT echo it (could contain
-    // upstream detail). Sanitized failure only (NFR-24/35).
-    await res.text().catch(() => undefined);
-    return { kind: "failed" };
-  }
-
-  let data: unknown;
-  try {
-    data = await res.json();
-  } catch {
-    return { kind: "failed" };
-  }
+  // Transport via the shared text-agnostic postGemini (timeoutMs is OUR local
+  // const, passed in). ai-speech does NOT use callGeminiText — it extracts the
+  // AUDIO inlineData.data tail LOCALLY below (BA-AC-05 / TC-06 audio isolation).
+  const out = await postGemini({
+    apiKey,
+    host: GEMINI_TTS_HOST,
+    model: TTS_MODEL,
+    body,
+    timeoutMs: UPSTREAM_TIMEOUT_MS,
+  });
+  if (out.kind !== "ok") return out; // rate_limited | upstream_timeout | failed pass straight through
 
   // Extract candidates[0].content.parts[0].inlineData {data, mimeType}.
-  const parts = (data as {
+  const parts = (out.data as {
     candidates?: { content?: { parts?: { inlineData?: { data?: string; mimeType?: string } }[] } }[];
   })?.candidates?.[0]?.content?.parts;
   const inline = Array.isArray(parts)
@@ -268,25 +207,9 @@ async function handler(req: Request): Promise<Response> {
   // or anon route can read it).
   // If SUPABASE_SERVICE_ROLE_KEY is missing, we fail closed with 500 rather
   // than fall back to the anon key (which would now be denied by RLS).
-  const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
-  const serviceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-  const apiKey = await (async (): Promise<string> => {
-    if (!supabaseUrl || !serviceKey) return '';
-    try {
-      const r = await fetch(
-        `${supabaseUrl}/rest/v1/runtime_secrets?select=value&name=eq.GEMINI_API_KEY&limit=1`,
-        { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-      );
-      if (!r.ok) return '';
-      const rows = await r.json();
-      const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-      if (!row) return '';
-      const v = (row as Record<string, unknown>).value;
-      return typeof v === 'string' ? v : '';
-    } catch {
-      return '';
-    }
-  })();
+  const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+  const serviceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const apiKey = await getApiKey(supabaseUrl, serviceKey);
   if (!apiKey) {
     return errorResponse(500, "tts_failed", "Speech synthesis is not configured");
   }

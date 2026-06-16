@@ -36,6 +36,12 @@
 // service_role key (NFR-24). It is NEVER read from the request
 // body, NEVER returned in a response, and NEVER logged.
 
+import { CORS_HEADERS } from "../_shared/cors.ts";
+import { jsonResponse, errorResponse } from "../_shared/http.ts";
+import { getApiKey } from "../_shared/apiKey.ts";
+import { callGeminiText, type GeminiTextOutcome } from "../_shared/gemini.ts";
+import { parseGeminiJson } from "../_shared/json.ts";
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -78,62 +84,12 @@ const RESPONSE_SCHEMA = {
   required: ["overall_score", "strengths", "errors", "suggestions", "revised_text"],
 } as const;
 
-const CORS_HEADERS: Record<string, string> = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "POST, OPTIONS",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
-};
-
 type ErrorCode =
   | "bad_request"
   | "unauthorized"
   | "rate_limited"
   | "ai_failed"
   | "upstream_timeout";
-
-// ---------------------------------------------------------------------------
-// Response helpers
-// ---------------------------------------------------------------------------
-
-function jsonResponse(status: number, body: unknown, extraHeaders?: Record<string, string>): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      ...CORS_HEADERS,
-      ...(extraHeaders ?? {}),
-    },
-  });
-}
-
-function errorResponse(
-  status: number,
-  code: ErrorCode,
-  message: string,
-  extraHeaders?: Record<string, string>,
-): Response {
-  return jsonResponse(status, { error: { code, message } }, extraHeaders);
-}
-
-/** Parse a Gemini JSON text payload. Gemini is called with
- *  responseMimeType "application/json" + a responseSchema, so `raw`
- *  SHOULD already be valid JSON, but it MIGHT occasionally arrive
- *  wrapped in ```json markdown fences. Strip fences if present, then
- *  JSON.parse. Returns undefined if parsing throws — the caller maps
- *  that to a clean ai_failed rather than emitting a malformed 200.
- *  Kept LOCAL to this Edge function (separate deploy unit; imports
- *  nothing from src/). */
-function parseGeminiJson(raw: string): unknown {
-  let s = raw.trim();
-  if (s.startsWith("```")) {
-    s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  }
-  try {
-    return JSON.parse(s);
-  } catch {
-    return undefined;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // Request validation
@@ -173,16 +129,11 @@ function validateBody(raw: unknown): { ok: true; value: ParsedRequest } | { ok: 
 }
 
 // ---------------------------------------------------------------------------
-// Gemini call
+// Gemini call — body assembly + prompt stay LOCAL; transport + text-tail come
+// from the shared callGeminiText (timeoutMs is OUR local UPSTREAM_TIMEOUT_MS).
 // ---------------------------------------------------------------------------
 
-type GeminiOutcome =
-  | { kind: "ok"; text: string }
-  | { kind: "rate_limited"; retryAfter: string | null }
-  | { kind: "upstream_timeout" }
-  | { kind: "failed" };
-
-async function callGemini(apiKey: string, prompt: string, content: string): Promise<GeminiOutcome> {
+async function callGemini(apiKey: string, prompt: string, content: string): Promise<GeminiTextOutcome> {
   const systemPrompt =
     `You are an English writing tutor. Analyze the student's essay and return a JSON object (no markdown fences) with this exact structure:
 {
@@ -205,70 +156,13 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
     },
   };
 
-  const url = `${GEMINI_HOST}/v1beta/models/${MODEL}:generateContent`;
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
-
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": apiKey,
-      },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    });
-  } catch (err) {
-    if (err instanceof DOMException && err.name === "AbortError") {
-      return { kind: "upstream_timeout" };
-    }
-    return { kind: "failed" };
-  } finally {
-    clearTimeout(timer);
-  }
-
-  if (res.status === 429) {
-    return { kind: "rate_limited", retryAfter: res.headers.get("Retry-After") };
-  }
-  if (!res.ok) {
-    await res.text().catch(() => undefined);
-    return { kind: "failed" };
-  }
-
-  let data: unknown;
-  try {
-    data = await res.json();
-  } catch {
-    return { kind: "failed" };
-  }
-  const text = (data as {
-    candidates?: { content?: { parts?: { text?: string }[] } }[];
-  })?.candidates?.[0]?.content?.parts?.[0]?.text;
-  if (typeof text !== "string" || text.length === 0) {
-    return { kind: "failed" };
-  }
-  return { kind: "ok", text };
-}
-
-async function getApiKey(supabaseUrl: string, serviceKey: string): Promise<string> {
-  if (!supabaseUrl || !serviceKey) return "";
-  try {
-    const r = await fetch(
-      `${supabaseUrl}/rest/v1/runtime_secrets?select=value&name=eq.GEMINI_API_KEY&limit=1`,
-      { headers: { apikey: serviceKey, Authorization: `Bearer ${serviceKey}` } },
-    );
-    if (!r.ok) return "";
-    const rows = await r.json();
-    const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-    if (!row) return "";
-    const v = (row as Record<string, unknown>).value;
-    return typeof v === "string" ? v : "";
-  } catch {
-    return "";
-  }
+  return callGeminiText({
+    apiKey,
+    host: GEMINI_HOST,
+    model: MODEL,
+    body,
+    timeoutMs: UPSTREAM_TIMEOUT_MS,
+  });
 }
 
 // ---------------------------------------------------------------------------
