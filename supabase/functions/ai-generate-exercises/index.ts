@@ -31,6 +31,10 @@
 import { CORS_HEADERS } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import { getApiKey } from "../_shared/apiKey.ts";
+import {
+  EXERCISE_GENERATION_RESPONSE_SCHEMA,
+  buildExerciseGenerationSystemPrompt,
+} from "../_shared/aiContentContracts.ts";
 import { callGeminiText, type GeminiTextOutcome } from "../_shared/gemini.ts";
 import { parseGeminiJson } from "../_shared/json.ts";
 
@@ -49,30 +53,6 @@ const UPSTREAM_TIMEOUT_MS = 30_000;
 const GEMINI_HOST = "https://generativelanguage.googleapis.com";
 
 /** Structured-output schema for the 3-exercise array. */
-const RESPONSE_SCHEMA = {
-  type: "array",
-  items: {
-    type: "object",
-    properties: {
-      id: { type: "string" },
-      type: { type: "string", enum: ["mcq", "cloze", "reorder"] },
-      prompt_en: { type: "string" },
-      prompt_vi: { type: "string" },
-      options: { type: "array", items: { type: "string" } },
-      correct_option: { type: "string" },
-      sentence_with_blank: { type: "string" },
-      correct_answer: { type: "string" },
-      scrambled_words: { type: "array", items: { type: "string" } },
-      correct_sentence: { type: "string" },
-      explanation_en: { type: "string" },
-      explanation_vi: { type: "string" },
-    },
-    required: ["id", "type", "prompt_en", "prompt_vi", "explanation_en", "explanation_vi"],
-  },
-  minItems: 3,
-  maxItems: 3,
-} as const;
-
 type ErrorCode =
   | "bad_request"
   | "unauthorized"
@@ -109,40 +89,7 @@ function validateBody(raw: unknown): { ok: true; value: ParsedRequest } | { ok: 
 // ---------------------------------------------------------------------------
 
 async function callGemini(apiKey: string, topicId: string) {
-  const systemPrompt = `You are an English language exercise generator. Generate exactly 3 exercises for the topic "${topicId}". Return a JSON array (no markdown fences) with this structure:
-[
-  {
-    "id": "ex-ai-1",
-    "type": "mcq",
-    "prompt_en": "<question in English>",
-    "prompt_vi": "<question in Vietnamese>",
-    "options": ["<option1>", "<option2>", "<option3>", "<option4>"],
-    "correct_option": "<correct option text>",
-    "explanation_en": "<explanation in English>",
-    "explanation_vi": "<explanation in Vietnamese>"
-  },
-  {
-    "id": "ex-ai-2",
-    "type": "cloze",
-    "prompt_en": "Fill in the blank:",
-    "prompt_vi": "Điền vào chỗ trống:",
-    "sentence_with_blank": "<sentence with [blank]>",
-    "correct_answer": "<answer>",
-    "explanation_en": "<explanation>",
-    "explanation_vi": "<explanation>"
-  },
-  {
-    "id": "ex-ai-3",
-    "type": "reorder",
-    "prompt_en": "Reorder the words:",
-    "prompt_vi": "Sắp xếp lại các từ:",
-    "scrambled_words": ["word1", "word2", ...],
-    "correct_sentence": "<correct sentence lowercase>",
-    "explanation_en": "<explanation>",
-    "explanation_vi": "<explanation>"
-  }
-]
-Make exercises relevant, educational, and at intermediate English level.`;
+  const systemPrompt = buildExerciseGenerationSystemPrompt(topicId);
 
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -151,7 +98,7 @@ Make exercises relevant, educational, and at intermediate English level.`;
       temperature: 0.7,
       maxOutputTokens: 4096,
       responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: EXERCISE_GENERATION_RESPONSE_SCHEMA,
     },
   };
 

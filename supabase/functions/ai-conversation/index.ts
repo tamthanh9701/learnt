@@ -37,6 +37,10 @@
 import { CORS_HEADERS } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import { getApiKey } from "../_shared/apiKey.ts";
+import {
+  CONVERSATION_RESPONSE_SCHEMA,
+  buildConversationSystemPrompt,
+} from "../_shared/aiContentContracts.ts";
 import { callGeminiText } from "../_shared/gemini.ts";
 
 // ---------------------------------------------------------------------------
@@ -67,34 +71,6 @@ const GEMINI_HOST = "https://generativelanguage.googleapis.com";
  *  in speakingService.ts:114-140 (Change 3, BR-12). The result
  *  is ALWAYS run through parseStructuredReply (defense in
  *  depth, even though we control the schema here). */
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    reply: { type: "string" },
-    feedback: {
-      type: "object",
-      properties: {
-        corrected_text: { type: "string" },
-        errors: {
-          type: "array",
-          items: {
-            type: "object",
-            properties: {
-              original: { type: "string" },
-              correction: { type: "string" },
-              explanation: { type: "string" },
-            },
-            required: ["original", "correction", "explanation"],
-          },
-        },
-        better_phrasing: { type: "string" },
-      },
-      required: ["corrected_text", "errors"],
-    },
-  },
-  required: ["reply", "feedback"],
-} as const;
-
 type ErrorCode =
   | "bad_request"
   | "unauthorized"
@@ -177,7 +153,7 @@ async function callGemini(apiKey: string, systemPrompt: string, history: Array<{
       temperature: 0.7,
       maxOutputTokens: 2048,
       responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: CONVERSATION_RESPONSE_SCHEMA,
     },
   };
 
@@ -193,28 +169,6 @@ async function callGemini(apiKey: string, systemPrompt: string, history: Array<{
 // ---------------------------------------------------------------------------
 // HTTP handler
 // ---------------------------------------------------------------------------
-
-const SYSTEM_PROMPT_TEMPLATE = (topic: string): string =>
-  `You are a friendly English conversation tutor helping a Vietnamese intermediate learner. The topic is "${topic}".
-
-Respond with a SINGLE JSON object ONLY - no markdown, no code fences, no prose before or after it - with this exact shape:
-{
-  "reply": "your conversational response to the learner",
-  "feedback": {
-    "corrected_text": "the learner's last message rewritten in correct, natural English",
-    "errors": [
-      { "original": "the learner's exact phrase", "correction": "the corrected phrase", "explanation": "a short, encouraging explanation in simple English" }
-    ],
-    "better_phrasing": "an optional, more natural way to express the same idea"
-  }
-}
-
-Rules:
-- "reply" is REQUIRED, non-empty: keep it conversational, encouraging, intermediate level, 2-4 sentences, and ask a follow-up question to keep the conversation flowing.
-- "feedback" corrects the LEARNER'S LAST message only (not your own reply).
-- "corrected_text" is REQUIRED and non-empty: if the learner's message is already correct, repeat it unchanged.
-- "errors" is REQUIRED and MUST be an array. If the learner made no mistakes, return an empty array []. Each item has "original", "correction", and "explanation".
-- "better_phrasing" is OPTIONAL: include it only when a more natural alternative exists; otherwise omit it.`;
 
 async function handler(req: Request): Promise<Response> {
   if (req.method === "OPTIONS") {
@@ -251,7 +205,7 @@ async function handler(req: Request): Promise<Response> {
   }
 
   const { topic, history } = validated.value;
-  const outcome = await callGemini(apiKey, SYSTEM_PROMPT_TEMPLATE(topic), history);
+  const outcome = await callGemini(apiKey, buildConversationSystemPrompt(topic), history);
 
   switch (outcome.kind) {
     case "ok":

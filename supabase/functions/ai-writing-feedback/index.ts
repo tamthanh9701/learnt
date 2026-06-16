@@ -39,6 +39,10 @@
 import { CORS_HEADERS } from "../_shared/cors.ts";
 import { jsonResponse, errorResponse } from "../_shared/http.ts";
 import { getApiKey } from "../_shared/apiKey.ts";
+import {
+  WRITING_FEEDBACK_RESPONSE_SCHEMA,
+  buildWritingFeedbackSystemPrompt,
+} from "../_shared/aiContentContracts.ts";
 import { callGeminiText, type GeminiTextOutcome } from "../_shared/gemini.ts";
 import { parseGeminiJson } from "../_shared/json.ts";
 
@@ -61,29 +65,6 @@ const GEMINI_HOST = "https://generativelanguage.googleapis.com";
  *  result is ALWAYS validated by the client (isValidWritingFeedback
  *  in llmValidation.ts), but schema-validity here is the first
  *  line of defense. */
-const RESPONSE_SCHEMA = {
-  type: "object",
-  properties: {
-    overall_score: { type: "number" },
-    strengths: { type: "array", items: { type: "string" } },
-    errors: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          original: { type: "string" },
-          corrected: { type: "string" },
-          explanation: { type: "string" },
-        },
-        required: ["original", "corrected", "explanation"],
-      },
-    },
-    suggestions: { type: "array", items: { type: "string" } },
-    revised_text: { type: "string" },
-  },
-  required: ["overall_score", "strengths", "errors", "suggestions", "revised_text"],
-} as const;
-
 type ErrorCode =
   | "bad_request"
   | "unauthorized"
@@ -134,16 +115,7 @@ function validateBody(raw: unknown): { ok: true; value: ParsedRequest } | { ok: 
 // ---------------------------------------------------------------------------
 
 async function callGemini(apiKey: string, prompt: string, content: string): Promise<GeminiTextOutcome> {
-  const systemPrompt =
-    `You are an English writing tutor. Analyze the student's essay and return a JSON object (no markdown fences) with this exact structure:
-{
-  "overall_score": <number 0-100>,
-  "strengths": [<string>, ...],
-  "errors": [{"original": "<wrong text>", "corrected": "<correct text>", "explanation": "<why>"}],
-  "suggestions": [<string>, ...],
-  "revised_text": "<improved version of the essay>"
-}
-Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coherence.`;
+  const systemPrompt = buildWritingFeedbackSystemPrompt();
 
   const body = {
     systemInstruction: { parts: [{ text: systemPrompt }] },
@@ -152,7 +124,7 @@ Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coheren
       temperature: 0.7,
       maxOutputTokens: 4096,
       responseMimeType: "application/json",
-      responseSchema: RESPONSE_SCHEMA,
+      responseSchema: WRITING_FEEDBACK_RESPONSE_SCHEMA,
     },
   };
 
