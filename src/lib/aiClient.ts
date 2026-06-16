@@ -8,6 +8,8 @@
  * cannot leave the UI in an infinite-loading state.
  */
 
+import { TimeoutError } from './timeout';
+
 export type AIProvider = 'gemini' | 'openai' | 'anthropic' | 'ollama' | 'none';
 
 export interface AIConfig {
@@ -44,13 +46,6 @@ export interface AICallOptions {
 
 /** Default timeout for LLM provider requests (30 s). */
 const FETCH_TIMEOUT_MS = 30_000;
-
-class TimeoutError extends Error {
-  constructor(provider: string, ms: number) {
-    super(`${provider} request timed out after ${ms / 1000} s`);
-    this.name = 'TimeoutError';
-  }
-}
 
 function fetchWithTimeout(input: RequestInfo | URL, init: RequestInit, timeoutMs: number): ReturnType<typeof fetch> {
   const controller = new AbortController();
