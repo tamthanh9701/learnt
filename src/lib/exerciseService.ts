@@ -1,9 +1,11 @@
 import { supabase } from './supabase';
-import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 import { recordActivity } from './streak';
 import { isValidExerciseList } from './llmValidation';
 import { withTimeout } from './timeout';
+import { generateStructuredContent, stripFencesAndParse } from './aiContentGenerator';
+import type { ContentGenerationSpec } from './aiContentGenerator';
+import { CONTENT_CONTRACTS } from './aiContentRegistry';
 
 export type ExerciseType = 'mcq' | 'cloze' | 'reorder';
 
@@ -102,97 +104,42 @@ export const seedExercises: Record<string, ExerciseQuestion[]> = {
 };
 
 /**
+ * Exercise recipe for the shared 3-tier ladder. The provider parser reuses the
+ * DUMB fence-strip (`stripFencesAndParse`) + `isValidExerciseList` UNCHANGED: a
+ * wrong shape or a parse throw => undefined/throw => fall through to the next
+ * tier. The Edge step carries `data.questions` and sends `{ topic_id }`. The mock
+ * is `generateMockExercises` (seed set for known topics, generic set otherwise) —
+ * a direct function reference, so the old recursion (CH7 P2-#14) stays removed.
+ */
+const exerciseSpec: ContentGenerationSpec<{ topicId: string }, ExerciseQuestion[]> = {
+  label: 'exercise',
+  buildMessages: ({ topicId }): AIChatMessage[] => [
+    { role: 'system', content: CONTENT_CONTRACTS.exercise.buildSystemPrompt(topicId) },
+    { role: 'user', content: `Generate 3 English exercises for the topic: "${topicId}"` },
+  ],
+  responseSchema: CONTENT_CONTRACTS.exercise.responseSchema,
+  parseProviderReply: (raw): ExerciseQuestion[] | undefined => {
+    const parsed = stripFencesAndParse(raw);
+    return isValidExerciseList(parsed) ? parsed : undefined;
+  },
+  edgeFunctionName: CONTENT_CONTRACTS.exercise.edgeFunctionName,
+  buildEdgeBody: ({ topicId }) => ({ topic_id: topicId }),
+  parseEdgeData: (data): ExerciseQuestion[] | undefined => {
+    const questions = (data as { questions?: unknown } | null | undefined)?.questions;
+    return isValidExerciseList(questions) ? questions : undefined;
+  },
+  mock: ({ topicId }): ExerciseQuestion[] => generateMockExercises(topicId),
+};
+
+/**
  * Generates interactive exercises either from seed data or using local AI simulator fallback.
  */
 export const fetchExercisesForTopic = async (
   topicId: string,
   isMock: boolean,
   aiConfig?: AIConfig
-): Promise<ExerciseQuestion[]> => {
-  // Try real AI provider first
-  if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
-    try {
-      const systemPrompt = `You are an English language exercise generator. Generate exactly 3 exercises for the topic "${topicId}". Return a JSON array (no markdown fences) with this structure:
-[
-  {
-    "id": "ex-ai-1",
-    "type": "mcq",
-    "prompt_en": "<question in English>",
-    "prompt_vi": "<question in Vietnamese>",
-    "options": ["<option1>", "<option2>", "<option3>", "<option4>"],
-    "correct_option": "<correct option text>",
-    "explanation_en": "<explanation in English>",
-    "explanation_vi": "<explanation in Vietnamese>"
-  },
-  {
-    "id": "ex-ai-2",
-    "type": "cloze",
-    "prompt_en": "Fill in the blank:",
-    "prompt_vi": "Điền vào chỗ trống:",
-    "sentence_with_blank": "<sentence with [blank]>",
-    "correct_answer": "<answer>",
-    "explanation_en": "<explanation>",
-    "explanation_vi": "<explanation>"
-  },
-  {
-    "id": "ex-ai-3",
-    "type": "reorder",
-    "prompt_en": "Reorder the words:",
-    "prompt_vi": "Sắp xếp lại các từ:",
-    "scrambled_words": ["word1", "word2", ...],
-    "correct_sentence": "<correct sentence lowercase>",
-    "explanation_en": "<explanation>",
-    "explanation_vi": "<explanation>"
-  }
-]
-Make exercises relevant, educational, and at intermediate English level.`;
-
-      const messages: AIChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Generate 3 English exercises for the topic: "${topicId}"` },
-      ];
-
-      const reply = await callAIProvider(aiConfig, messages);
-      const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const exercises = JSON.parse(jsonStr);
-      if (isValidExerciseList(exercises)) {
-        return exercises;
-      }
-      console.warn('AI provider returned invalid ExerciseQuestion[] shape, falling back.');
-    } catch (err) {
-      console.warn('AI provider call failed for exercise generation, falling back:', err);
-    }
-  }
-
-  if (isMock) {
-    return generateMockExercises(topicId);
-  } else {
-    // Call Supabase Edge function to generate AI exercises based on topic keywords
-    try {
-      const { data, error } = await supabase.functions.invoke('ai-generate-exercises', {
-        body: { topic_id: topicId },
-      });
-
-      if (error) throw error;
-      if (isValidExerciseList(data?.questions)) {
-        return data.questions;
-      }
-      console.warn('Edge function returned invalid ExerciseQuestion[] shape, falling back.');
-    } catch (err) {
-      console.warn('ai-generate-exercises function not available or failed. Falling back to local generation.', err);
-    }
-    // CH7 (2026-06-07, P2-#14): pre-fix did
-    //   return fetchExercisesForTopic(topicId, true);
-    // which is a RECURSIVE call to the same function. It worked
-    // because the isMock=true branch does NOT recurse, but the
-    // recursive structure is confusing and the original
-    // aiConfig is silently dropped. Now: extract the mock
-    // fallback into generateMockExercises() and call it
-    // directly. The intent ("use AI as primary, fall back to
-    // mock") is now obvious.
-    return generateMockExercises(topicId);
-  }
-};
+): Promise<ExerciseQuestion[]> =>
+  generateStructuredContent(exerciseSpec, { topicId }, { isMock, aiConfig });
 
 /**
  * Build a 3-exercise fallback set when the AI provider is not

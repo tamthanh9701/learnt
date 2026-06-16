@@ -18,8 +18,6 @@
  * responder are implementation details of this module — callers never see them.
  */
 
-import { supabase } from './supabase';
-import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 import { parseStructuredReply } from './aiFeedback';
 import type { StructuredFeedback } from './aiFeedback';
@@ -29,43 +27,12 @@ import {
 } from './conversationRepository';
 import type { ChatMessage } from './conversationRepository';
 import { recordSpeakingActivity } from './speakingActivityRecorder';
+import { generateStructuredContent } from './aiContentGenerator';
+import type { ContentGenerationSpec } from './aiContentGenerator';
+import { CONTENT_CONTRACTS } from './aiContentRegistry';
 
 export type { ChatMessage, ConversationSession } from './conversationRepository';
 export { loadConversationSessions as fetchSpeakingSessionsHistory } from './conversationRepository';
-
-/**
- * Gemini-only structured-output schema (BR-12). Mirrors the
- * `{reply, feedback:{corrected_text, errors[], better_phrasing?}}` contract so a
- * Gemini call can emit schema-valid JSON directly. Reliability boost only — the
- * result is ALWAYS run through `parseStructuredReply` (defense in depth).
- */
-const FEEDBACK_RESPONSE_SCHEMA: Record<string, unknown> = {
-  type: 'object',
-  properties: {
-    reply: { type: 'string' },
-    feedback: {
-      type: 'object',
-      properties: {
-        corrected_text: { type: 'string' },
-        errors: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              original: { type: 'string' },
-              correction: { type: 'string' },
-              explanation: { type: 'string' },
-            },
-            required: ['original', 'correction', 'explanation'],
-          },
-        },
-        better_phrasing: { type: 'string' },
-      },
-      required: ['corrected_text', 'errors'],
-    },
-  },
-  required: ['reply', 'feedback'],
-};
 
 /** Local AI dialog responder — last-resort fallback when no provider/Edge works. */
 const getMockAIResponse = (topic: string, history: ChatMessage[]): string => {
@@ -99,32 +66,46 @@ const getMockAIResponse = (topic: string, history: ChatMessage[]): string => {
   return "That is interesting! Could you expand a bit more on that thought? How does that affect your daily life or career goals?";
 };
 
-const buildSystemPrompt = (topic: string): string =>
-  `You are a friendly English conversation tutor helping a Vietnamese intermediate learner. The topic is "${topic}".
-
-Respond with a SINGLE JSON object ONLY — no markdown, no code fences, no prose before or after it — with this exact shape:
-{
-  "reply": "your conversational response to the learner",
-  "feedback": {
-    "corrected_text": "the learner's last message rewritten in correct, natural English",
-    "errors": [
-      { "original": "the learner's exact phrase", "correction": "the corrected phrase", "explanation": "a short, encouraging explanation in simple English" }
-    ],
-    "better_phrasing": "an optional, more natural way to express the same idea"
-  }
-}
-
-Rules:
-- "reply" is REQUIRED, non-empty: keep it conversational, encouraging, intermediate level, 2-4 sentences, and ask a follow-up question to keep the conversation flowing.
-- "feedback" corrects the LEARNER'S LAST message only (not your own reply).
-- "corrected_text" is REQUIRED and non-empty: if the learner's message is already correct, repeat it unchanged.
-- "errors" is REQUIRED and MUST be an array. If the learner made no mistakes, return an empty array []. Each item has "original", "correction", and "explanation".
-- "better_phrasing" is OPTIONAL: include it only when a more natural alternative exists; otherwise omit it.`;
-
 interface GenerateResult {
   reply: string;
   feedback?: StructuredFeedback;
 }
+
+interface ConversationInput {
+  topic: string;
+  history: ChatMessage[];
+}
+
+/**
+ * Conversation recipe for the shared 3-tier ladder. The provider parser reuses
+ * `parseStructuredReply` UNCHANGED — it never returns undefined (always yields a
+ * `{reply}`), so a non-throwing provider call always wins (only a provider throw
+ * falls to Edge), exactly as before. The Edge step carries a reply only (no
+ * feedback). The mock keeps its 150ms cosmetic delay so the typing loader flashes.
+ */
+const conversationSpec: ContentGenerationSpec<ConversationInput, GenerateResult> = {
+  label: 'conversation',
+  buildMessages: ({ topic, history }): AIChatMessage[] => [
+    { role: 'system', content: CONTENT_CONTRACTS.conversation.buildSystemPrompt(topic) },
+    ...history.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+  ],
+  responseSchema: CONTENT_CONTRACTS.conversation.responseSchema,
+  parseProviderReply: (raw): GenerateResult => {
+    const parsed = parseStructuredReply(raw);
+    return { reply: parsed.reply, feedback: parsed.feedback };
+  },
+  edgeFunctionName: CONTENT_CONTRACTS.conversation.edgeFunctionName,
+  buildEdgeBody: ({ topic, history }) => ({ topic, history }),
+  parseEdgeData: (data): GenerateResult | undefined => {
+    const reply = (data as { reply?: unknown } | null | undefined)?.reply;
+    return reply ? { reply: reply as string } : undefined;
+  },
+  mock: ({ topic, history }): Promise<GenerateResult> =>
+    // Small cosmetic delay so the typing loader flashes (preserved from inline ladder).
+    new Promise<GenerateResult>((resolve) => {
+      setTimeout(() => resolve({ reply: getMockAIResponse(topic, history) }), 150);
+    }),
+};
 
 /** Generate a reply: provider -> Edge Function -> mock. Internal. */
 const generateReply = async (
@@ -132,43 +113,8 @@ const generateReply = async (
   history: ChatMessage[],
   isMock: boolean,
   aiConfig?: AIConfig,
-): Promise<GenerateResult> => {
-  // 1. Real provider (if configured).
-  if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
-    try {
-      const messages: AIChatMessage[] = [
-        { role: 'system', content: buildSystemPrompt(topic) },
-        ...history.map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
-      ];
-      const callOptions =
-        aiConfig.provider === 'gemini' ? { responseSchema: FEEDBACK_RESPONSE_SCHEMA } : undefined;
-      const raw = await callAIProvider(aiConfig, messages, callOptions);
-      const parsed = parseStructuredReply(raw);
-      return { reply: parsed.reply, feedback: parsed.feedback };
-    } catch (err) {
-      console.warn('AI provider call failed, falling back:', err);
-    }
-  }
-
-  // 2. Edge Function (cloud only).
-  if (!isMock) {
-    try {
-      const { data, error } = await supabase.functions.invoke('ai-conversation', {
-        body: { topic, history },
-      });
-      if (error) throw error;
-      if (data?.reply) return { reply: data.reply };
-    } catch (err) {
-      console.warn('ai-conversation Edge function failed/not deployed, falling back:', err);
-    }
-  }
-
-  // 3. Mock (last resort). Small cosmetic delay so the typing loader flashes.
-  const reply = await new Promise<string>((resolve) => {
-    setTimeout(() => resolve(getMockAIResponse(topic, history)), 150);
-  });
-  return { reply };
-};
+): Promise<GenerateResult> =>
+  generateStructuredContent(conversationSpec, { topic, history }, { isMock, aiConfig });
 
 export interface SendConversationTurnInput {
   userId: string;

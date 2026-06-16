@@ -1,9 +1,11 @@
 import { supabase } from './supabase';
-import { callAIProvider } from './aiClient';
 import type { AIConfig, ChatMessage as AIChatMessage } from './aiClient';
 import { recordActivity } from './streak';
 import { isValidWritingFeedback } from './llmValidation';
 import { withTimeout } from './timeout';
+import { generateStructuredContent, stripFencesAndParse } from './aiContentGenerator';
+import type { ContentGenerationSpec } from './aiContentGenerator';
+import { CONTENT_CONTRACTS } from './aiContentRegistry';
 
 export interface WritingFeedbackError {
   original: string;
@@ -184,6 +186,37 @@ export const analyzeGrammarMock = (content: string): WritingFeedback => {
   };
 };
 
+interface WritingInput {
+  prompt: string;
+  content: string;
+}
+
+/**
+ * Writing recipe for the shared 3-tier ladder. The provider parser reuses the
+ * DUMB fence-strip (`stripFencesAndParse`) + `isValidWritingFeedback` UNCHANGED:
+ * a wrong shape or a parse throw => undefined/throw => fall through to the next
+ * tier. The Edge step carries `data.feedback`. The mock is the local heuristic.
+ */
+const writingSpec: ContentGenerationSpec<WritingInput, WritingFeedback> = {
+  label: 'writing',
+  buildMessages: ({ prompt, content }): AIChatMessage[] => [
+    { role: 'system', content: CONTENT_CONTRACTS.writing.buildSystemPrompt() },
+    { role: 'user', content: `Topic: ${prompt}\n\nEssay:\n${content}` },
+  ],
+  responseSchema: CONTENT_CONTRACTS.writing.responseSchema,
+  parseProviderReply: (raw): WritingFeedback | undefined => {
+    const parsed = stripFencesAndParse(raw);
+    return isValidWritingFeedback(parsed) ? parsed : undefined;
+  },
+  edgeFunctionName: CONTENT_CONTRACTS.writing.edgeFunctionName,
+  buildEdgeBody: ({ prompt, content }) => ({ prompt, content }),
+  parseEdgeData: (data): WritingFeedback | undefined => {
+    const feedback = (data as { feedback?: unknown } | null | undefined)?.feedback;
+    return isValidWritingFeedback(feedback) ? feedback : undefined;
+  },
+  mock: ({ content }): WritingFeedback => analyzeGrammarMock(content),
+};
+
 /**
  * Submit essay for AI feedback analysis
  */
@@ -196,66 +229,13 @@ export const submitWritingContent = async (
 ): Promise<WritingSubmission> => {
   const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
   const now = new Date().toISOString();
-  let aiFeedback: WritingFeedback | null = null;
-  let feedbackGenerated = false;
 
-  // 1. Generate feedback
-  // Try real AI provider first (if configured)
-  if (aiConfig && aiConfig.provider !== 'none' && aiConfig.apiKey && aiConfig.model) {
-    try {
-      const systemPrompt = `You are an English writing tutor. Analyze the student's essay and return a JSON object (no markdown fences) with this exact structure:
-{
-  "overall_score": <number 0-100>,
-  "strengths": [<string>, ...],
-  "errors": [{"original": "<wrong text>", "corrected": "<correct text>", "explanation": "<why>"}],
-  "suggestions": [<string>, ...],
-  "revised_text": "<improved version of the essay>"
-}
-Be thorough but encouraging. Focus on grammar, spelling, vocabulary, and coherence.`;
-
-      const messages: AIChatMessage[] = [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: `Topic: ${prompt}\n\nEssay:\n${content}` },
-      ];
-
-      const reply = await callAIProvider(aiConfig, messages);
-
-      // Parse JSON from reply (handle potential markdown fences)
-      const jsonStr = reply.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim();
-      const parsed = JSON.parse(jsonStr);
-      if (isValidWritingFeedback(parsed)) {
-        aiFeedback = parsed;
-        feedbackGenerated = true;
-      } else {
-        console.warn('AI provider returned invalid WritingFeedback shape, falling back.');
-      }
-    } catch (err) {
-      console.warn('AI provider call failed for writing feedback, falling back:', err);
-    }
-  }
-
-  // Try Edge function if not mock and AI provider was not called/failed
-  if (!feedbackGenerated && !isMock) {
-    try {
-      const { data, error: funcError } = await supabase.functions.invoke('ai-writing-feedback', {
-        body: { prompt, content },
-      });
-      if (funcError) throw funcError;
-      if (isValidWritingFeedback(data?.feedback)) {
-        aiFeedback = data.feedback;
-        feedbackGenerated = true;
-      } else {
-        console.warn('Edge function returned invalid WritingFeedback shape, falling back.');
-      }
-    } catch (err) {
-      console.warn('Supabase Edge Function failed or not deployed, falling back:', err);
-    }
-  }
-
-  // Fallback to local mock analysis
-  if (!feedbackGenerated || !aiFeedback) {
-    aiFeedback = analyzeGrammarMock(content);
-  }
+  // 1. Generate feedback (provider -> ai-writing-feedback Edge -> analyzeGrammarMock).
+  const aiFeedback: WritingFeedback = await generateStructuredContent(
+    writingSpec,
+    { prompt, content },
+    { isMock, aiConfig },
+  );
 
   // 2. Save submission
   if (isMock) {
