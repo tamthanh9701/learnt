@@ -1,12 +1,14 @@
 import { supabase } from './supabase';
-import { fsrs, createEmptyCard, Rating } from 'ts-fsrs';
-import type { Card as FSRSCard, Grade } from 'ts-fsrs';
+import { Rating } from 'ts-fsrs';
+import type { Card as FSRSCard } from 'ts-fsrs';
 import { recordActivity } from './streak';
 import { cardToRecord } from './learnerCard';
 import type { LearnerCardRecord } from './learnerCard';
 import { seedTopics, seedFlashcards } from '../data/seedVocabulary';
 import type { SeedTopic, SeedFlashcard } from '../data/seedVocabulary';
 import { withTimeout } from './timeout';
+import { recordToFsrsCard, newFsrsCard, scheduleReview } from './vocabulary/fsrsScheduler';
+import { seededKey, topicsKey, flashcardsKey, learnerCardsKey, progressKey } from './vocabulary/storageKeys';
 
 
 export interface TopicProgress {
@@ -54,10 +56,6 @@ export interface ReviewSessionCard {
   fsrsCard?: FSRSCard;
 }
 
-// Initialise FSRS with default parameters
-const fsrsInstance = fsrs();
-
-
 /**
  * Seeding helper to populate localStorage or Supabase on first run.
  *
@@ -82,12 +80,12 @@ const fsrsInstance = fsrs();
 export const seedDatabaseIfNeeded = async (userId: string, isMock: boolean): Promise<void> => {
   if (isMock) {
     // Check if topics are seeded
-    const seeded = localStorage.getItem(`learnt_seeded_${userId}`);
+    const seeded = localStorage.getItem(seededKey(userId));
     if (!seeded) {
-      localStorage.setItem(`learnt_topics_${userId}`, JSON.stringify(seedTopics));
-      localStorage.setItem(`learnt_flashcards_${userId}`, JSON.stringify(seedFlashcards));
-      localStorage.setItem(`learnt_learner_cards_${userId}`, JSON.stringify([]));
-      localStorage.setItem(`learnt_seeded_${userId}`, 'true');
+      localStorage.setItem(topicsKey(userId), JSON.stringify(seedTopics));
+      localStorage.setItem(flashcardsKey(userId), JSON.stringify(seedFlashcards));
+      localStorage.setItem(learnerCardsKey(userId), JSON.stringify([]));
+      localStorage.setItem(seededKey(userId), 'true');
     }
     return;
   }
@@ -157,9 +155,9 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
   await seedDatabaseIfNeeded(userId, isMock);
 
   if (isMock) {
-    const topics: SeedTopic[] = JSON.parse(localStorage.getItem(`learnt_topics_${userId}`) || '[]');
-    const flashcards: SeedFlashcard[] = JSON.parse(localStorage.getItem(`learnt_flashcards_${userId}`) || '[]');
-    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const topics: SeedTopic[] = JSON.parse(localStorage.getItem(topicsKey(userId)) || '[]');
+    const flashcards: SeedFlashcard[] = JSON.parse(localStorage.getItem(flashcardsKey(userId)) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(learnerCardsKey(userId)) || '[]');
 
     const now = new Date();
 
@@ -266,7 +264,7 @@ export const fetchTopicsAndProgress = async (userId: string, isMock: boolean): P
  */
 export const getDueCardsCount = async (userId: string, isMock: boolean): Promise<number> => {
   if (isMock) {
-    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(learnerCardsKey(userId)) || '[]');
     const now = new Date();
     return learnerCards.filter(lc => new Date(lc.due) <= now).length;
   } else {
@@ -292,8 +290,8 @@ export const fetchCardsForSession = async (
   type: 'review' | 'learn'
 ): Promise<ReviewSessionCard[]> => {
   if (isMock) {
-    const flashcards: SeedFlashcard[] = JSON.parse(localStorage.getItem(`learnt_flashcards_${userId}`) || '[]');
-    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const flashcards: SeedFlashcard[] = JSON.parse(localStorage.getItem(flashcardsKey(userId)) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(learnerCardsKey(userId)) || '[]');
 
     const topicCards = flashcards.filter(c => c.topic_id === topicId);
     const now = new Date();
@@ -303,18 +301,7 @@ export const fetchCardsForSession = async (
       for (const card of topicCards) {
         const lc = learnerCards.find(l => l.card_id === card.id);
         if (lc && new Date(lc.due) <= now) {
-          const fsrsCard: FSRSCard = {
-            due: new Date(lc.due),
-            stability: lc.stability,
-            difficulty: lc.difficulty,
-            elapsed_days: lc.elapsed_days,
-            scheduled_days: lc.scheduled_days,
-            reps: lc.reps,
-            lapses: lc.lapses || 0,
-            state: lc.state,
-            learning_steps: lc.learning_steps || 0,
-            last_review: lc.last_review ? new Date(lc.last_review) : undefined,
-          };
+          const fsrsCard: FSRSCard = recordToFsrsCard(lc);
           sessionCards.push({
             id: card.id,
             topic_id: card.topic_id,
@@ -373,18 +360,7 @@ export const fetchCardsForSession = async (
       for (const card of (flashcards || [])) {
         const lc = (learnerCards || []).find(l => l.card_id === card.id);
         if (lc && lc.due <= now) {
-          const fsrsCard: FSRSCard = {
-            due: new Date(lc.due),
-            stability: lc.stability,
-            difficulty: lc.difficulty,
-            elapsed_days: lc.elapsed_days,
-            scheduled_days: lc.scheduled_days,
-            reps: lc.reps,
-            lapses: lc.lapses || 0,
-            state: lc.state,
-            learning_steps: lc.learning_steps || 0,
-            last_review: lc.last_review ? new Date(lc.last_review) : undefined,
-          };
+          const fsrsCard: FSRSCard = recordToFsrsCard(lc);
           sessionCards.push({
             id: card.id,
             topic_id: card.topic_id,
@@ -436,24 +412,13 @@ export const submitCardReview = async (
   let currentFsrsCard: FSRSCard;
 
   if (isMock) {
-    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(learnerCardsKey(userId)) || '[]');
     const lc = learnerCards.find(l => l.card_id === cardId);
 
     if (lc) {
-      currentFsrsCard = {
-        due: new Date(lc.due),
-        stability: lc.stability,
-        difficulty: lc.difficulty,
-        elapsed_days: lc.elapsed_days,
-        scheduled_days: lc.scheduled_days,
-        reps: lc.reps,
-        lapses: lc.lapses || 0,
-        state: lc.state,
-        learning_steps: lc.learning_steps || 0,
-        last_review: lc.last_review ? new Date(lc.last_review) : undefined,
-      };
+      currentFsrsCard = recordToFsrsCard(lc);
     } else {
-      currentFsrsCard = createEmptyCard(now);
+      currentFsrsCard = newFsrsCard(now);
     }
   } else {
     const { data, error } = await supabase
@@ -468,30 +433,18 @@ export const submitCardReview = async (
     }
 
     if (data) {
-      currentFsrsCard = {
-        due: new Date(data.due),
-        stability: data.stability,
-        difficulty: data.difficulty,
-        elapsed_days: data.elapsed_days,
-        scheduled_days: data.scheduled_days,
-        reps: data.reps,
-        lapses: data.lapses || 0,
-        state: data.state,
-        learning_steps: data.learning_steps || 0,
-        last_review: data.last_review ? new Date(data.last_review) : undefined,
-      };
+      currentFsrsCard = recordToFsrsCard(data);
     } else {
-      currentFsrsCard = createEmptyCard(now);
+      currentFsrsCard = newFsrsCard(now);
     }
   }
 
   // 2. Schedule next state using ts-fsrs algorithm
-  const schedulingInfo = fsrsInstance.repeat(currentFsrsCard, now);
-  const nextCardState = schedulingInfo[rating as Grade].card;
+  const nextCardState = scheduleReview(currentFsrsCard, rating, now);
 
   // 3. Save updated card
   if (isMock) {
-    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(`learnt_learner_cards_${userId}`) || '[]');
+    const learnerCards: LearnerCardRecord[] = JSON.parse(localStorage.getItem(learnerCardsKey(userId)) || '[]');
     const index = learnerCards.findIndex(l => l.card_id === cardId);
 
     const existing = index >= 0 ? learnerCards[index] : undefined;
@@ -505,14 +458,14 @@ export const submitCardReview = async (
     } else {
       learnerCards.push(savedRecord);
     }
-    localStorage.setItem(`learnt_learner_cards_${userId}`, JSON.stringify(learnerCards));
+    localStorage.setItem(learnerCardsKey(userId), JSON.stringify(learnerCards));
 
     // Update progress tracker
     const today = now.toISOString().split('T')[0];
-    const progressKey = `learnt_progress_${userId}_${today}`;
-    const progress = JSON.parse(localStorage.getItem(progressKey) || '{"cards_reviewed": 0}');
+    const todayProgressKey = progressKey(userId, today);
+    const progress = JSON.parse(localStorage.getItem(todayProgressKey) || '{"cards_reviewed": 0}');
     progress.cards_reviewed += 1;
-    localStorage.setItem(progressKey, JSON.stringify(progress));
+    localStorage.setItem(todayProgressKey, JSON.stringify(progress));
 
     // Streak handled centrally (any-activity, reset-on-gap)
     await recordActivity(userId, true, now);
