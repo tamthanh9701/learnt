@@ -2,8 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import { seedPronunciationChallenges } from '../lib/speakingService';
-import type { PronunciationChallenge } from '../lib/speakingService';
+import { seedPronunciationChallenges } from '../lib/pronunciationChallenges';
+import type { PronunciationChallenge } from '../lib/pronunciationChallenges';
 import { seedFlashcards } from '../data/seedVocabulary';
 import type { SeedFlashcard } from '../data/seedVocabulary';
 import {
@@ -19,7 +19,7 @@ import {
   savePronunciationAttempt,
   fetchPronunciationHistory,
   buildCardHistoryStats,
-} from '../lib/speakingService';
+} from '../lib/pronunciationAttemptRepository';
 import {
   selectNextSentenceIndex,
   computePracticeCounters,

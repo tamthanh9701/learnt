@@ -4,10 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useAI } from '../contexts/AIContext';
 import { PROVIDER_LABELS } from '../lib/aiClient';
-import { fetchAIConversationResponse, fetchSpeakingSessionsHistory, streamAIConversationResponse } from '../lib/speakingService';
+import { sendConversationTurn, fetchSpeakingSessionsHistory } from '../lib/conversationService';
 import { supportsStreaming } from '../lib/aiClient';
 import { mergeSpeechTranscript } from '../lib/speechInput';
-import type { ChatMessage } from '../lib/speakingService';
+import type { ChatMessage } from '../lib/conversationService';
 import { isCompleteFeedback } from '../lib/aiFeedback';
 import { useSpeechRecognition, getSpeechErrorMessageKey } from '../hooks/useSpeechRecognition';
 import { useSpeechSynthesis } from '../hooks/useSpeechSynthesis';
@@ -156,17 +156,18 @@ export const ConversationPage: React.FC = () => {
 
     try {
       if (canStream) {
-        // Live v2: stream a plain-text reply and speak each sentence as it
-        // completes. We append one assistant bubble and grow its content as
-        // deltas arrive. Persist the full reply once streaming ends.
+        // Live v2 (fake-stream): append a growing assistant bubble; the unified
+        // service emits each complete sentence via onSentence — speak it the
+        // moment it arrives. The full reply is also persisted (no v2 gap).
         const replyTs = new Date().toISOString();
         setMessages(prev => [...prev, { role: 'assistant', content: '', timestamp: replyTs }]);
-        const full = await streamAIConversationResponse(
+        await sendConversationTurn({
+          userId: user.id,
           topic,
-          updatedHistory,
+          history: updatedHistory,
+          isMock,
           aiConfig,
-          (sentence) => {
-            // Speak each complete sentence the moment it arrives.
+          onSentence: (sentence) => {
             speak(sentence);
             setMessages(prev => {
               const copy = [...prev];
@@ -180,14 +181,15 @@ export const ConversationPage: React.FC = () => {
               return copy;
             });
           },
-        );
-        // NOTE (v2 limitation, see PRD): streamed turns are not yet persisted to
-        // speaking_sessions — streaming prioritises low-latency speech. A
-        // dedicated persist path is planned; until then the streamed reply lives
-        // in the on-screen session only. `full` is the completed reply text.
-        void full;
+        });
       } else {
-        const aiReply = await fetchAIConversationResponse(user.id, topic, updatedHistory, isMock, aiConfig);
+        const aiReply = await sendConversationTurn({
+          userId: user.id,
+          topic,
+          history: updatedHistory,
+          isMock,
+          aiConfig,
+        });
         setMessages(prev => [
           ...prev,
           { role: 'assistant', content: aiReply, timestamp: new Date().toISOString() }
@@ -214,7 +216,13 @@ export const ConversationPage: React.FC = () => {
     setReplyError(false);
     setSubmitting(true);
     try {
-      const aiReply = await fetchAIConversationResponse(user.id, topic, messages, isMock, aiConfig);
+      const aiReply = await sendConversationTurn({
+        userId: user.id,
+        topic,
+        history: messages,
+        isMock,
+        aiConfig,
+      });
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: aiReply, timestamp: new Date().toISOString() }

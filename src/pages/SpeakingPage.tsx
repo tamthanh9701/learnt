@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
-import { fetchSpeakingSessionsHistory } from '../lib/speakingService';
-import type { ConversationSession } from '../lib/speakingService';
+import { fetchSpeakingSessionsHistory } from '../lib/conversationService';
+import type { ConversationSession } from '../lib/conversationService';
 import { Mic, MessageSquare, Calendar, History, Sparkles } from 'lucide-react';
 
 export const SpeakingPage: React.FC = () => {

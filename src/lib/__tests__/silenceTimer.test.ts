@@ -68,10 +68,12 @@ describe('createSilenceTimer [TC-VAD]', () => {
   });
 
   it('TC-VAD-06 uses injected timer functions when provided', () => {
-    let captured: (() => void) | null = null;
-    const setTimeoutFn = vi.fn((cb: () => void) => {
-      captured = cb;
-      return 1 as unknown as ReturnType<typeof setTimeout>;
+    const captured: { cb: (() => void) | null } = { cb: null };
+    const fakeHandle = setTimeout(() => {}, 0);
+    clearTimeout(fakeHandle);
+    const setTimeoutFn = vi.fn((cb: () => void): ReturnType<typeof setTimeout> => {
+      captured.cb = cb;
+      return fakeHandle;
     });
     const clearTimeoutFn = vi.fn();
     const onElapse = vi.fn();
@@ -84,7 +86,7 @@ describe('createSilenceTimer [TC-VAD]', () => {
 
     timer.bump();
     expect(setTimeoutFn).toHaveBeenCalledOnce();
-    captured?.();
+    captured.cb?.();
     expect(onElapse).toHaveBeenCalledOnce();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildCardHistoryStats } from '../speakingService';
+import { buildCardHistoryStats } from '../pronunciationAttemptRepository';
 import {
   PRONUNCIATION_TOPIC,
   type PronunciationSessionEntry,

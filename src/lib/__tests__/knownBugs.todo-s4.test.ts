@@ -6,7 +6,7 @@ import {
   fetchTopicsAndProgress,
 } from '../vocabularyService';
 import { submitWritingContent } from '../writingService';
-import { fetchAIConversationResponse } from '../speakingService';
+import { sendConversationTurn } from '../conversationService';
 import { recordExerciseCompletion } from '../exerciseService';
 
 // =============================================================================
@@ -47,12 +47,12 @@ describe('CH2 streak any-activity [TODO_S4] (RED until S4)', () => {
 
   it('[TODO_S4] CH2-02 a Speaking session records activity + sets streak=1 (AC-2.2)', async () => {
     const today = new Date().toISOString().split('T')[0];
-    await fetchAIConversationResponse(
+    await sendConversationTurn({
       userId,
-      'Technology',
-      [{ role: 'user', content: 'Hello', timestamp: new Date().toISOString() }],
-      true,
-    );
+      topic: 'Technology',
+      history: [{ role: 'user', content: 'Hello', timestamp: new Date().toISOString() }],
+      isMock: true,
+    });
 
     const profile = JSON.parse(localStorage.getItem(`learnt_profile_${userId}`) || '{}');
     expect(profile.current_streak).toBe(1);
