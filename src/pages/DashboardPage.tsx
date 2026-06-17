@@ -3,10 +3,9 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { Flame, BookOpen, Mic, PenTool, ArrowRight, CheckCircle2, AlertCircle } from 'lucide-react';
-import { supabase } from '../lib/supabase';
-import { withTimeout, TimeoutError } from '../lib/timeout';
+import { TimeoutError } from '../lib/timeout';
 import { displayStreak, dayKey } from '../lib/streak';
-import type { LearnerCardRecord } from '../lib/learnerCard';
+import { fetchDashboardStats as fetchDashboardStatsReadModel } from '../lib/vocabulary/dashboardReadModel';
 
 export const DashboardPage: React.FC = () => {
   const { user, profile, isMock } = useAuth();
@@ -25,74 +24,9 @@ export const DashboardPage: React.FC = () => {
     setLoading(true);
     setStatsError(false);
     try {
-      if (isMock) {
-        // Simulate loading mock data from localStorage
-        const savedCards = localStorage.getItem(`learnt_learner_cards_${user.id}`);
-        let due = 0;
-        if (savedCards) {
-          const cards: LearnerCardRecord[] = JSON.parse(savedCards);
-          const now = new Date();
-          due = cards.filter(c => new Date(c.due) <= now).length;
-        } else {
-          // Set 5 default due cards for first-time use
-          due = 5;
-        }
-        setDueCount(due);
-
-        // Get daily progress
-        const today = new Date().toISOString().split('T')[0];
-        const savedProgress = localStorage.getItem(`learnt_progress_${user.id}_${today}`);
-        if (savedProgress) {
-          const p = JSON.parse(savedProgress);
-          setReviewedToday(p.cards_reviewed || 0);
-        } else {
-          setReviewedToday(0);
-        }
-      } else {
-        // Fetch from Supabase — each query gets its own 8 s AbortController
-        // timeout so a slow / hung backend cannot leave setLoading(false)
-        // un-called and the user staring at the spinner forever.
-        const now = new Date().toISOString();
-        const today = dayKey(new Date());
-
-        // 1. Count due cards.
-        const cardRes = await withTimeout(
-          async (signal) => {
-            const { count, error } = await supabase
-              .from('learner_cards')
-              .select('*', { count: 'exact', head: true })
-              .eq('learner_id', user.id)
-              .lte('due', now)
-              .abortSignal(signal);
-            if (error) throw error;
-            return count;
-          },
-          8_000,
-          'DashboardPage: due cards count',
-        );
-        if (typeof cardRes === 'number') setDueCount(cardRes);
-
-        // 2. Fetch today's progress.
-        const progRes = await withTimeout(
-          async (signal) => {
-            const { data, error } = await supabase
-              .from('daily_progress')
-              .select('cards_reviewed')
-              .eq('learner_id', user.id)
-              .eq('activity_date', today)
-              .abortSignal(signal)
-              .maybeSingle();
-            // PGRST116 = row not found, perfectly fine here.
-            if (error && error.code !== 'PGRST116') throw error;
-            return data;
-          },
-          8_000,
-          'DashboardPage: daily progress',
-        );
-        if (progRes) {
-          setReviewedToday(progRes.cards_reviewed);
-        }
-      }
+      const { dueCount, reviewedToday } = await fetchDashboardStatsReadModel(user.id, isMock);
+      setDueCount(dueCount);
+      setReviewedToday(reviewedToday);
     } catch (err) {
       // A TimeoutError here just means the cloud was slow / unreachable;
       // we degrade gracefully to "0" rather than spinning forever.
