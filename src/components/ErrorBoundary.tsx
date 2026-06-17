@@ -12,7 +12,7 @@ const ErrorFallback: React.FC = () => {
     <div
       role="alert"
       className="error-boundary-fallback flex flex-col align-center justify-center"
-      style={{ minHeight: '100vh', gap: 'var(--spacing-md)', textAlign: 'center', padding: 'var(--spacing-lg)' }}
+      style={{ minHeight: '100dvh', gap: 'var(--spacing-md)', textAlign: 'center', padding: 'var(--spacing-lg)' }}
     >
       <h1 className="title-md">{t('errors.boundaryTitle')}</h1>
       <p className="body-md">{t('errors.boundaryMessage')}</p>

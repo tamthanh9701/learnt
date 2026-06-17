@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../contexts/LanguageContext';
 import { useTheme } from '../contexts/ThemeContext';
-import { BookOpen, Moon, Sun, Languages } from 'lucide-react';
+import { BookOpen, Moon, Sun, Languages, Info } from 'lucide-react';
 
 export const LoginPage: React.FC = () => {
   const { signIn, signUp, isMock } = useAuth();
@@ -71,8 +71,9 @@ export const LoginPage: React.FC = () => {
         </div>
 
         {isMock && (
-          <div className="demo-banner">
-            <strong>ℹ️ Demo Mode:</strong> You can sign in or sign up with any email and password. No verification required. Data will be saved locally.
+          <div className="demo-banner flex align-center gap-sm" role="status">
+            <Info size={16} aria-hidden="true" />
+            <span><strong>Demo Mode:</strong> You can sign in or sign up with any email and password. No verification required. Data will be saved locally.</span>
           </div>
         )}
 

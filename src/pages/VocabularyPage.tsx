@@ -104,7 +104,7 @@ export const VocabularyPage: React.FC = () => {
         <div className="card error-card flex flex-col gap-sm" role="alert" aria-live="assertive">
           <div className="flex align-center gap-xs">
             <AlertCircle size={20} style={{ color: 'var(--error)', flexShrink: 0 }} aria-hidden="true" />
-            <span className="title-xs" style={{ color: 'var(--error)' }}>{title}</span>
+            <h2 className="title-xs" style={{ color: 'var(--error)', margin: 0 }}>{title}</h2>
           </div>
           <p className="body-sm" style={{ color: 'var(--text-secondary)' }}>{hint}</p>
           {error.message && (
